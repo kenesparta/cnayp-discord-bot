@@ -1,0 +1,5 @@
+# Which key encrypts what. `sops secrets/prod.enc.yaml` picks the matching rule
+# automatically, so nobody has to remember recipients.
+creation_rules:
+  - path_regex: ^secrets/.*\.enc\.ya?ml$
+    age: age1t68w9x7xed0cwfmm53hcs7c073gn7cnz5300a84xk5w872uq7dksc0h4av

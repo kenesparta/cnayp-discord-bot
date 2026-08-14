@@ -1,0 +1,20 @@
+# Runs the published image on a host. Start it through sops so the token only
+# ever exists in the process environment:
+#
+#   sops exec-env secrets/prod.enc.yaml 'docker compose -f deployments/docker-compose.yaml up -d'
+services:
+  bot:
+    image: ghcr.io/kenesparta/cnayp-discord-bot:edge
+    restart: unless-stopped
+    environment:
+      DISCORD_TOKEN: ${DISCORD_TOKEN:?set via sops exec-env}
+      DISCORD_GUILD_ID: ${DISCORD_GUILD_ID:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
