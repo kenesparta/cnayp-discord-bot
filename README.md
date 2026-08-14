@@ -146,6 +146,36 @@ Both documents describe the bot's actual data handling, which follows from the `
 intent and the absence of any persistent storage. **Changing either — widening intents, adding a
 database or a cache, or logging new fields — means updating the Privacy Policy in the same change.**
 
+## Application metadata
+
+What the Developer Portal shows users in the "Add App" dialog. It lives in Discord, not in this repo,
+so it is recorded here to keep it reviewable:
+
+> A bot for the Cloud Native Ayacucho — Peru community. Shares learning material, documentation and
+> meetup announcements. Educational and informational use only; it cannot read your messages and
+> stores nothing.
+
+Tags: `cloud native`, `community`, `kubernetes`, `peru`, `education` (max 5, 20 characters each).
+
+That description repeats the Privacy Policy's two load-bearing claims — no message reading, no
+storage — so **the constraint above covers it as well**: widening intents or adding storage
+falsifies the portal text too, and nothing in CI will catch that.
+
+The description and tags are settable through the API; the Terms of Service and Privacy Policy URLs
+are **not** — `PATCH /applications/@me` ignores them, so those two fields have to be edited by hand
+in the portal. To re-apply the description and tags, or to read back what is currently live:
+
+```sh
+# read
+sops exec-env secrets/prod.enc.yaml \
+  'curl -s -H "Authorization: Bot $DISCORD_TOKEN" https://discord.com/api/v10/applications/@me'
+
+# write (body in app.json: {"description": "...", "tags": [...]})
+sops exec-env secrets/prod.enc.yaml \
+  'curl -s -X PATCH -H "Authorization: Bot $DISCORD_TOKEN" -H "Content-Type: application/json" \
+     --data-binary @app.json https://discord.com/api/v10/applications/@me'
+```
+
 ## Deployment
 
 Pushes to `main` publish `ghcr.io/kenesparta/cnayp-discord-bot:edge`; `v*` tags publish semver tags

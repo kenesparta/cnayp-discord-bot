@@ -117,6 +117,11 @@ it). A command that did something outside that scope — anything transactional,
 advisory — would falsify it; widen §2 in the same change rather than letting the pages describe a
 narrower bot than the one that ships.
 
+The same two claims — no message reading, no storage — are also in the Discord application
+description, which lives in the Developer Portal rather than in git. It is transcribed in the README
+("Application metadata") so a change here has somewhere to check against; the portal itself still has
+to be updated by hand, and CI cannot catch a drift.
+
 The Privacy Policy makes specific factual claims about the bot's behaviour: `GUILDS` intent only, no
 persistent storage, and logs that record command *names* but not their argument values, user IDs, or
 usernames. Any change to intents, storage, or the fields passed to `logger.*` falsifies one of those
