@@ -111,6 +111,12 @@ entirely separate static deploy; do not add an HTTP server to the bot to host th
 The HTML in `site/` is the single source of truth — there is deliberately no Markdown copy, because
 two versions of a legal document drift.
 
+Both documents frame the bot as a tool for **Cloud Native Ayacucho — Peru**, used for *educational
+and informational purposes only* (`terms.html` §2, and the disclaimers in §9 and §10 that lean on
+it). A command that did something outside that scope — anything transactional, commercial, or
+advisory — would falsify it; widen §2 in the same change rather than letting the pages describe a
+narrower bot than the one that ships.
+
 The Privacy Policy makes specific factual claims about the bot's behaviour: `GUILDS` intent only, no
 persistent storage, and logs that record command *names* but not their argument values, user IDs, or
 usernames. Any change to intents, storage, or the fields passed to `logger.*` falsifies one of those

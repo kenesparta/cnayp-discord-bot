@@ -4,6 +4,10 @@ A Discord bot in Go with **no external dependencies** — the WebSocket transpor
 Discord API client are implemented here on top of the standard library. It currently serves a single
 `/ping` slash command and is meant as a base to grow from.
 
+It runs for **Cloud Native Ayacucho — Peru**, a volunteer community that meets to learn about cloud
+native technologies, and is used for educational and informational purposes only. It is an
+independent project, not endorsed by or affiliated with the CNCF, the Linux Foundation, or Discord.
+
 ## Requirements
 
 - Go 1.26+
@@ -109,8 +113,9 @@ Discord requires a Terms of Service and Privacy Policy URL for the application. 
 - Privacy Policy — https://cnayp-bot.kenesparta.dev/privacy.html
 
 The bot itself serves no HTTP; it only dials out to Discord. The site is a separate static deploy,
-run by `.github/workflows/site.yml` on any change under `site/`. It authenticates to AWS by assuming
-an IAM role through GitHub's OIDC provider, so no AWS access keys exist on either side.
+run by `.github/workflows/site.yml` on `v*` tags — a legal document goes live because a release was
+cut, not because `main` moved. It authenticates to AWS by assuming an IAM role through GitHub's OIDC
+provider, so no AWS access keys exist on either side.
 
 **The AWS side is not defined in this repo.** The bucket, CloudFront distribution, DNS records and
 deploy role live in the `personal-infra` repository (`terraform/static-cnayp-bot.tf`, spec §5.11).
