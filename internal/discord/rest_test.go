@@ -293,7 +293,7 @@ func TestTransportErrorsNeverCarryTheToken(t *testing.T) {
 
 // Unwrapping *url.Error must not cost callers the ability to match the cause.
 func TestTransportErrorsStayMatchable(t *testing.T) {
-	client, _ := recordingServer(t, func(w http.ResponseWriter, r *http.Request) {
+	client, _ := recordingServer(t, func(_ http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done()
 	})
 

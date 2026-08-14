@@ -9,6 +9,7 @@ import (
 // https://discord.com/developers/docs/topics/gateway#gateway-intents.
 type Intents int
 
+// The intents this bot may request. Privileged ones need Discord's approval.
 const (
 	IntentGuilds         Intents = 1 << 0
 	IntentGuildMembers   Intents = 1 << 1 // privileged
@@ -131,6 +132,7 @@ type Ready struct {
 // ApplicationCommandType distinguishes slash commands from context-menu entries.
 type ApplicationCommandType int
 
+// The command types Discord publishes.
 const (
 	ChatInputCommand ApplicationCommandType = 1
 	UserCommand      ApplicationCommandType = 2
@@ -140,6 +142,7 @@ const (
 // ApplicationCommandOptionType is the type of a single command parameter.
 type ApplicationCommandOptionType int
 
+// The option types a command parameter can declare.
 const (
 	SubCommandOption      ApplicationCommandOptionType = 1
 	SubCommandGroupOption ApplicationCommandOptionType = 2
@@ -175,6 +178,7 @@ type ApplicationCommandOption struct {
 // InteractionType distinguishes the ways Discord can invoke the bot.
 type InteractionType int
 
+// The ways Discord can invoke the bot.
 const (
 	PingInteraction               InteractionType = 1
 	ApplicationCommandInteraction InteractionType = 2
@@ -233,6 +237,7 @@ func (d InteractionData) Option(name string) (InteractionDataOption, bool) {
 // within three seconds; use DeferredMessageResponse when the work takes longer.
 type InteractionResponseType int
 
+// The response types the bot may send.
 const (
 	PongResponse            InteractionResponseType = 1
 	MessageResponse         InteractionResponseType = 4

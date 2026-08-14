@@ -31,8 +31,9 @@ go test -run '^TestSessionIdentifiesAndBecomesReady$' ./internal/discord   # sin
 go test -run '^TestReadFrame$/^masked_server_frame_is_rejected$' ./internal/websocket   # subtest
 ```
 
-`golangci-lint` is not installed locally; `make lint` fails on the lint step until it is
-(`brew install golangci-lint`). CI runs it either way.
+Run `make lint` before pushing — CI runs golangci-lint v2 and it is stricter than `go vet`. In
+particular `revive` requires a doc comment on every exported `const` block (not just on the type
+above it) and flags unused function parameters, including in tests, where `_` is the fix.
 
 ## Architecture
 

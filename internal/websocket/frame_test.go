@@ -147,8 +147,9 @@ func TestWriteFrameIsMaskedAndDecodable(t *testing.T) {
 				t.Error("mask bit is not set; RFC 6455 requires client frames to be masked")
 			}
 
-			have := decodeClientFrame(t, raw)
-			if !bytes.Equal(have, payload) && !(len(have) == 0 && len(payload) == 0) {
+			// bytes.Equal treats a nil slice as an empty one, so the "empty" case
+			// needs no separate arm.
+			if have := decodeClientFrame(t, raw); !bytes.Equal(have, payload) {
 				t.Errorf("decoded payload length %d, want %d", len(have), len(payload))
 			}
 		})
