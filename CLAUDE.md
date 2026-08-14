@@ -75,6 +75,13 @@ cmd/bot            main(): config → signals → run() → exit code
   is logged exactly once there and not propagated.
 - **A failed publish is not fatal**: previously registered commands keep working, so it logs and the
   session runs on rather than dropping the connection.
+- **No credential reaches an error string.** `/interactions/{id}/{token}/callback` and
+  `/webhooks/{app_id}/{token}` carry a bearer-equivalent token in the URL, and interaction errors
+  get logged. Two things enforce this in `rest.go`: `redactPath` scrubs the token out of the path
+  stored on `APIError` and formatted into wrapped errors, and `withoutURL` unwraps `*url.Error`,
+  whose message quotes the whole request URL and would otherwise put it straight back. Any new error
+  built from a path must go through both. `TestInteractionErrorsNeverCarryTheToken` and
+  `TestTransportErrorsNeverCarryTheToken` are the guards.
 - **Fatal vs retryable disconnects** are decided by `fatalCloseError`. Close codes 4004/4010–4014
   (bad token, bad intents, bad API version) end `Run`; everything else reconnects with backoff.
   A new non-retryable code goes in that function, nowhere else.
@@ -92,6 +99,41 @@ loosened for tests.
 
 Timing-sensitive gateway tests use short heartbeat intervals; they have been run with `-count=8
 -race` clean. If one goes flaky, suspect the goroutine ownership in `connect`, not the timing.
+
+## Policy site
+
+`site/` holds the Terms of Service and Privacy Policy the Discord developer portal links to, served
+from S3 behind CloudFront at `cnayp-bot.kenesparta.dev`. **The bot process serves no HTTP at all** —
+it only dials out to Discord, has no listener, no `EXPOSE`, and no published ports. The site is an
+entirely separate static deploy; do not add an HTTP server to the bot to host these.
+
+The HTML in `site/` is the single source of truth — there is deliberately no Markdown copy, because
+two versions of a legal document drift.
+
+The Privacy Policy makes specific factual claims about the bot's behaviour: `GUILDS` intent only, no
+persistent storage, and logs that record command *names* but not their argument values, user IDs, or
+usernames. Any change to intents, storage, or the fields passed to `logger.*` falsifies one of those
+claims — update `site/privacy.html` in the same change.
+
+### The AWS side lives in another repo
+
+The bucket, CloudFront distribution, DNS and deploy role are Terraform in **`personal-infra`**
+(`terraform/static-cnayp-bot.tf`, spec §5.11) — not here. Do not add IAM JSON, bucket policies, or
+distribution config to this repo; that would create a second source of truth for resources Terraform
+owns. This repo only uploads files. The workflow's `AWS_ROLE_ARN` secret and
+`CLOUDFRONT_DISTRIBUTION_ID` variable come from `terraform output`.
+
+Three constraints that repo imposes, which `site.yml` depends on:
+
+- **The published set is fixed**: `index.html`, `terms.html`, `privacy.html`, `404.html`, plus
+  `style.css`. `404.html` is *required* — an S3 origin behind OAC returns 403 for a missing key
+  (the distribution has no `s3:ListBucket`), and both 403 and 404 map to `/404.html`. Without it
+  CloudFront serves its own generic error page. A guard step fails the build if any is missing.
+- **The role grants `CreateInvalidation` but not `GetInvalidation`.** Never `aws cloudfront wait
+  invalidation-completed` — it would fail with AccessDenied.
+- **No immutable caching, ever** (spec G19 in reverse). These documents are overwritten in place;
+  `immutable` cannot be invalidated out of a browser and would strand readers on a superseded
+  policy. Edge TTL is 300s default / 3600s max, and invalidation is mandatory, not optional.
 
 ## Secrets (sops + age)
 

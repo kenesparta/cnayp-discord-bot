@@ -100,6 +100,47 @@ export `SOPS_AGE_KEY_FILE` to point at it (the Makefile already does).
 To grant access to another maintainer or a deploy host, add their public key to `.sops.yaml` and run
 `sops updatekeys secrets/prod.enc.yaml`.
 
+## Policy site
+
+Discord requires a Terms of Service and Privacy Policy URL for the application. The pages live in
+[`site/`](site) and are published to S3 behind CloudFront at:
+
+- Terms of Service — https://cnayp-bot.kenesparta.dev/terms.html
+- Privacy Policy — https://cnayp-bot.kenesparta.dev/privacy.html
+
+The bot itself serves no HTTP; it only dials out to Discord. The site is a separate static deploy,
+run by `.github/workflows/site.yml` on any change under `site/`. It authenticates to AWS by assuming
+an IAM role through GitHub's OIDC provider, so no AWS access keys exist on either side.
+
+**The AWS side is not defined in this repo.** The bucket, CloudFront distribution, DNS records and
+deploy role live in the `personal-infra` repository (`terraform/static-cnayp-bot.tf`, spec §5.11).
+Get the three values this repo's workflow needs from there:
+
+```sh
+terraform output cnayp_bot_site_bucket           # kenesparta-cnayp-bot-site
+terraform output cnayp_bot_site_distribution_id  # -> CLOUDFRONT_DISTRIBUTION_ID variable
+terraform output cnayp_bot_site_role_arn         # -> AWS_ROLE_ARN secret
+```
+
+| Kind | Name | Notes |
+| ---- | ---- | ----- |
+| Secret | `AWS_ROLE_ARN` | Not a credential; the trust policy is what guards it. |
+| Variable | `CLOUDFRONT_DISTRIBUTION_ID` | Required — the deploy fails without it. |
+
+The published set is exactly `index.html`, `terms.html`, `privacy.html`, `404.html` and `style.css`.
+`404.html` is **required**: an S3 origin behind OAC answers a missing key with 403, and the
+distribution maps both 403 and 404 to `/404.html`. The workflow fails fast if any of them is absent.
+
+Preview locally with any static server, for example:
+
+```sh
+python3 -m http.server -d site 8000    # http://localhost:8000/terms.html
+```
+
+Both documents describe the bot's actual data handling, which follows from the `GUILDS`-only gateway
+intent and the absence of any persistent storage. **Changing either — widening intents, adding a
+database or a cache, or logging new fields — means updating the Privacy Policy in the same change.**
+
 ## Deployment
 
 Pushes to `main` publish `ghcr.io/kenesparta/cnayp-discord-bot:edge`; `v*` tags publish semver tags

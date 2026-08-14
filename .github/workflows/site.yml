@@ -1,0 +1,90 @@
+name: Deploy site
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - '.github/workflows/site.yml'
+  workflow_dispatch:
+
+# id-token lets the job mint an OIDC token and assume the AWS role. No AWS access
+# keys exist on either side; AWS_ROLE_ARN is the only secret, and an ARN is
+# useless to anyone whose GitHub token does not match the role's trust policy.
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: site
+  cancel-in-progress: false
+
+env:
+  # Provisioned in the personal-infra repo (terraform/static-cnayp-bot.tf, spec
+  # §5.11). Read the current values with:
+  #   terraform output cnayp_bot_site_bucket
+  #   terraform output cnayp_bot_site_distribution_id
+  #   terraform output cnayp_bot_site_role_arn
+  BUCKET: kenesparta-cnayp-bot-site
+  AWS_REGION: us-east-1
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: github-actions-cnayp-bot-site
+          aws-region: ${{ env.AWS_REGION }}
+
+      # The distribution maps both 403 and 404 to /404.html, and an S3 origin
+      # behind OAC answers a missing key with 403. Without this file CloudFront
+      # serves its own generic error page instead.
+      - name: Check the required upload set
+        run: |
+          missing=0
+          for page in index.html terms.html privacy.html 404.html style.css; do
+            [ -f "site/$page" ] || { echo "::error::site/$page is missing"; missing=1; }
+          done
+          exit $missing
+
+      # sync, not per-file cp: the deploy role carries s3:DeleteObject and
+      # s3:ListBucket precisely so --delete can prune what the site no longer
+      # publishes. Content types come from the .html/.css extensions.
+      - name: Publish to S3
+        run: |
+          aws s3 sync site/ "s3://$BUCKET/" \
+            --delete \
+            --cache-control 'public, max-age=300' \
+            --no-progress
+
+      # The edge holds an object for at most an hour on its own; this is what
+      # makes a correction to a published legal document land in seconds. The
+      # role grants CreateInvalidation on this one distribution — and not
+      # GetInvalidation, so this must not wait on completion.
+      - name: Invalidate CloudFront
+        env:
+          DISTRIBUTION_ID: ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }}
+        run: |
+          if [ -z "$DISTRIBUTION_ID" ]; then
+            echo "::error::Set the CLOUDFRONT_DISTRIBUTION_ID repository variable" \
+                 "(terraform output cnayp_bot_site_distribution_id). Readers would" \
+                 "otherwise keep a superseded policy for up to an hour."
+            exit 1
+          fi
+          aws cloudfront create-invalidation \
+            --distribution-id "$DISTRIBUTION_ID" \
+            --paths '/*' \
+            --query 'Invalidation.Id' --output text
+
+      - name: Summary
+        run: |
+          {
+            echo '### Site deployed'
+            echo
+            echo '- https://cnayp-bot.kenesparta.dev/terms.html'
+            echo '- https://cnayp-bot.kenesparta.dev/privacy.html'
+          } >> "$GITHUB_STEP_SUMMARY"
