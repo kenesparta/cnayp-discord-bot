@@ -1,11 +1,17 @@
 name: Deploy site
 
+# Publishing is tag-driven, not branch-driven: a legal document goes live because
+# a release was cut, not because main moved. The deploy role's trust policy is
+# scoped to refs/tags/* to match, so a run from a branch cannot assume it — and
+# a manual dispatch therefore has to name a tag:
+#
+#   gh workflow run site.yml --ref v0.1.0
+#
+# No `paths` filter: GitHub does not evaluate path filters for tag pushes, so one
+# here would read as a constraint that silently does nothing.
 on:
   push:
-    branches: [main]
-    paths:
-      - 'site/**'
-      - '.github/workflows/site.yml'
+    tags: ['v*']
   workflow_dispatch:
 
 # id-token lets the job mint an OIDC token and assume the AWS role. No AWS access
