@@ -98,6 +98,14 @@ https://github.com/cncf/foundation/blob/main/code-of-conduct.md
 - Una cuenta por persona, sin suplantar a nadie.
 - Términos de Discord: https://discord.com/terms
 - Normas de la comunidad: https://discord.com/guidelines
+
+## 🛡️ Equipo de moderación
+
+Estas son las personas con el rol **Moderador**. Puedes escribirle a cualquiera por DM:
+
+- **Edith Puclla** — https://edithpuclla.com/
+- **Glisse Jorge** — https://pe.linkedin.com/in/glisse-jorge
+- **Ken Esparta** — https://kenesparta.dev/
 ```
 
 ## ── POST 4 / 8 · Español ──
@@ -124,7 +132,7 @@ Tomado del Código de Conducta de la CNCF. En este servidor no se permite:
 Si algo te incomoda, o ves que se rompe una de estas reglas:
 
 1. **En el servidor** — envía un DM a cualquier persona con el rol **Moderador**.
-2. **Por correo** — kenesparta@pm.me, si prefieres no escribirle a un moderador, o si el problema es con uno de ellos.
+2. **Por correo** — kenesparta@pm.me, si prefieres no reportar por DM. Si tu reporte es sobre Ken, escríbele directamente a Edith o a Glisse.
 3. **A la CNCF** — si involucra a un proyecto o un evento de la CNCF: conduct@cncf.io · eventconduct@cncf.io
 
 Los reportes se tratan de forma confidencial y recibirás una respuesta en un plazo de **tres días hábiles**. **Nunca** habrá represalias contra quien reporta de buena fe.
@@ -217,6 +225,14 @@ https://github.com/cncf/foundation/blob/main/code-of-conduct.md
 - One account per person, and no impersonation.
 - Discord Terms: https://discord.com/terms
 - Community Guidelines: https://discord.com/guidelines
+
+## 🛡️ Moderation team
+
+These are the people holding the **Moderator** role. You can DM any of them:
+
+- **Edith Puclla** — https://edithpuclla.com/
+- **Glisse Jorge** — https://pe.linkedin.com/in/glisse-jorge
+- **Ken Esparta** — https://kenesparta.dev/
 ```
 
 ## ── POST 8 / 8 · English ──
@@ -243,7 +259,7 @@ Taken from the CNCF Code of Conduct. The following are not allowed in this serve
 If something makes you uncomfortable, or you see one of these rules being broken:
 
 1. **In the server** — DM anyone with the **Moderator** role.
-2. **By email** — kenesparta@pm.me, if you would rather not message a moderator, or if a moderator is the problem.
+2. **By email** — kenesparta@pm.me, if you would rather not report by DM. If your report is about Ken, write directly to Edith or Glisse instead.
 3. **To the CNCF** — if it involves a CNCF project or event: conduct@cncf.io · eventconduct@cncf.io
 
 Reports are handled confidentially, and you will get a response within **three business days**. There will **never** be retaliation for reporting in good faith.
