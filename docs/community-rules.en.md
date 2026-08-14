@@ -1,4 +1,4 @@
-# Community Rules — Cloud Native Ayacucho · Peru (English)
+# Rules — Cloud Native Ayacucho Community (CNAYP) · English
 
 Source text for the server's `#rules` channel. The Spanish version lives in
 [`community-rules.es.md`](community-rules.es.md); **the two must say the same thing**, so any change
@@ -24,7 +24,7 @@ the server — the last line promises exactly that.
 ## ── MESSAGE 1 / 4 ──
 
 ```
-# 📜 Community Rules — Cloud Native Ayacucho · Peru
+# 📜 Rules — Cloud Native Ayacucho Community (CNAYP)
 
 Welcome! We are a volunteer community learning about cloud native technologies. This server is **educational and informational**: we are here to learn, and to help other people learn.
 

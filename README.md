@@ -4,9 +4,9 @@ A Discord bot in Go with **no external dependencies** — the WebSocket transpor
 Discord API client are implemented here on top of the standard library. It currently serves a single
 `/ping` slash command and is meant as a base to grow from.
 
-It runs for **Cloud Native Ayacucho — Peru**, a volunteer community that meets to learn about cloud
-native technologies, and is used for educational and informational purposes only. It is an
-independent project, not endorsed by or affiliated with the CNCF, the Linux Foundation, or Discord.
+It runs for the **Cloud Native Ayacucho Community (CNAYP)**, a volunteer community that meets to
+learn about cloud native technologies, and is used for educational and informational purposes only.
+It is an independent project, not endorsed by or affiliated with the CNCF, the Linux Foundation, or Discord.
 
 ## Requirements
 
@@ -151,7 +151,7 @@ database or a cache, or logging new fields — means updating the Privacy Policy
 What the Developer Portal shows users in the "Add App" dialog. It lives in Discord, not in this repo,
 so it is recorded here to keep it reviewable:
 
-> A bot for the Cloud Native Ayacucho — Peru community. Shares learning material, documentation and
+> A bot for the Cloud Native Ayacucho Community (CNAYP). Shares learning material, documentation and
 > meetup announcements. Educational and informational use only; it cannot read your messages and
 > stores nothing.
 

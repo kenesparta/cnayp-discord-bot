@@ -1,4 +1,4 @@
-# Reglas de la Comunidad — Cloud Native Ayacucho · Perú (español)
+# Reglas — Cloud Native Ayacucho Community (CNAYP) · español
 
 Texto fuente del canal `#reglas` del servidor. La versión en inglés está en
 [`community-rules.en.md`](community-rules.en.md); **las dos deben decir lo mismo**, así que cualquier
@@ -24,7 +24,7 @@ en el servidor — la última línea lo promete.
 ## ── MENSAJE 1 / 4 ──
 
 ```
-# 📜 Reglas de la Comunidad — Cloud Native Ayacucho · Perú
+# 📜 Reglas — Cloud Native Ayacucho Community (CNAYP)
 
 ¡Bienvenido, bienvenida! Somos una comunidad de voluntarios que aprende sobre tecnologías cloud native. Este servidor es **educativo e informativo**: venimos a aprender y a ayudar a otras personas a aprender.
 
