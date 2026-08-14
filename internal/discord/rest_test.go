@@ -173,6 +173,158 @@ func TestClientReportsAPIErrors(t *testing.T) {
 	}
 }
 
+func TestRedactPath(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{
+			name: "interaction callback token is removed",
+			path: "/interactions/1234/super-secret-token/callback",
+			want: "/interactions/1234/" + redacted + "/callback",
+		},
+		{
+			name: "webhook token is removed",
+			path: "/webhooks/app-1/super-secret-token/messages/@original",
+			want: "/webhooks/app-1/" + redacted + "/messages/@original",
+		},
+		{
+			name: "webhook token is removed when it ends the path",
+			path: "/webhooks/app-1/super-secret-token",
+			want: "/webhooks/app-1/" + redacted,
+		},
+		{
+			name: "command paths carry no credential",
+			path: "/applications/app-1/guilds/guild-1/commands",
+			want: "/applications/app-1/guilds/guild-1/commands",
+		},
+		{
+			name: "gateway path is untouched",
+			path: "/gateway/bot",
+			want: "/gateway/bot",
+		},
+		{
+			name: "truncated interaction path does not panic",
+			path: "/interactions/1234",
+			want: "/interactions/1234",
+		},
+		{
+			name: "empty path",
+			path: "",
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if have := redactPath(tt.path); have != tt.want {
+				t.Errorf("redactPath(%q) = %q, want %q", tt.path, have, tt.want)
+			}
+		})
+	}
+}
+
+// The interaction token authorises posting as the bot, and interaction errors are
+// logged, so no error may carry it.
+func TestInteractionErrorsNeverCarryTheToken(t *testing.T) {
+	const token = "super-secret-interaction-token"
+
+	tests := []struct {
+		name    string
+		handler http.HandlerFunc
+	}{
+		{
+			name: "api error",
+			handler: func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusNotFound)
+				_ = json.NewEncoder(w).Encode(map[string]any{"code": 10062, "message": "Unknown interaction"})
+			},
+		},
+		{
+			name: "rate limited past the retry budget",
+			handler: func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusTooManyRequests)
+				_ = json.NewEncoder(w).Encode(map[string]any{"retry_after": 0.001})
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client, _ := recordingServer(t, tt.handler)
+
+			interaction := &Interaction{ID: "int-1", Token: token}
+			err := client.RespondToInteraction(context.Background(), interaction, MessageReply("pong"))
+			if err == nil {
+				t.Fatal("error = nil, want a failure to inspect")
+			}
+			if strings.Contains(err.Error(), token) {
+				t.Errorf("error message leaks the interaction token: %q", err.Error())
+			}
+			if !strings.Contains(err.Error(), "int-1") {
+				t.Errorf("error message = %q, want it to keep the interaction id for debugging", err.Error())
+			}
+
+			var apiErr *APIError
+			if errors.As(err, &apiErr) && strings.Contains(apiErr.Path, token) {
+				t.Errorf("APIError.Path leaks the interaction token: %q", apiErr.Path)
+			}
+		})
+	}
+}
+
+// A transport failure formats the path itself rather than going through APIError,
+// so it needs its own guard.
+func TestTransportErrorsNeverCarryTheToken(t *testing.T) {
+	const token = "super-secret-interaction-token"
+
+	// Port 1 refuses connections, so the request fails before any response.
+	client := NewClient("test-token", WithBaseURL("http://127.0.0.1:1"))
+
+	err := client.RespondToInteraction(context.Background(), &Interaction{ID: "int-1", Token: token}, MessageReply("pong"))
+	if err == nil {
+		t.Fatal("error = nil, want the connection to be refused")
+	}
+	if strings.Contains(err.Error(), token) {
+		t.Errorf("error message leaks the interaction token: %q", err.Error())
+	}
+}
+
+// Unwrapping *url.Error must not cost callers the ability to match the cause.
+func TestTransportErrorsStayMatchable(t *testing.T) {
+	client, _ := recordingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	err := client.RespondToInteraction(ctx, &Interaction{ID: "int-1", Token: "secret"}, MessageReply("pong"))
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("error = %v, want errors.Is(err, context.DeadlineExceeded) to still hold", err)
+	}
+	if strings.Contains(err.Error(), "secret") {
+		t.Errorf("error message leaks the interaction token: %q", err.Error())
+	}
+}
+
+// The request itself must still go to the real, unredacted URL.
+func TestRedactionDoesNotChangeTheRequestPath(t *testing.T) {
+	client, requests := recordingServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	interaction := &Interaction{ID: "int-1", Token: "real-token"}
+	if err := client.RespondToInteraction(context.Background(), interaction, MessageReply("pong")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if want := "/interactions/int-1/real-token/callback"; (*requests)[0].URL.Path != want {
+		t.Errorf("request path = %q, want %q", (*requests)[0].URL.Path, want)
+	}
+}
+
 func TestClientToleratesNonJSONErrorBody(t *testing.T) {
 	client, _ := recordingServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)

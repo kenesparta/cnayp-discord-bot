@@ -15,6 +15,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -150,7 +151,7 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 	if in != nil {
 		encoded, err := json.Marshal(in)
 		if err != nil {
-			return fmt.Errorf("encode %s %s request: %w", method, path, err)
+			return fmt.Errorf("encode %s %s request: %w", method, redactPath(path), err)
 		}
 		body = encoded
 	}
@@ -174,6 +175,9 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 // attempt performs one request. A positive return value means the call was rate
 // limited and may be retried after that delay.
 func (c *Client) attempt(ctx context.Context, method, path string, body []byte, out any) (time.Duration, error) {
+	// Errors travel into logs, so they never carry the raw path.
+	safePath := redactPath(path)
+
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)
@@ -181,7 +185,7 @@ func (c *Client) attempt(ctx context.Context, method, path string, body []byte, 
 
 	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, reader)
 	if err != nil {
-		return 0, fmt.Errorf("build %s %s request: %w", method, path, err)
+		return 0, fmt.Errorf("build %s %s request: %w", method, safePath, withoutURL(err))
 	}
 	req.Header.Set("Authorization", "Bot "+c.token)
 	req.Header.Set("User-Agent", c.userAgent)
@@ -191,7 +195,7 @@ func (c *Client) attempt(ctx context.Context, method, path string, body []byte, 
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return 0, fmt.Errorf("%s %s: %w", method, path, err)
+		return 0, fmt.Errorf("%s %s: %w", method, safePath, withoutURL(err))
 	}
 	defer func() {
 		// Drain before closing so the connection returns to the pool.
@@ -203,7 +207,7 @@ func (c *Client) attempt(ctx context.Context, method, path string, body []byte, 
 		// Read the body once: both the error message and the rate limit delay come
 		// out of it, and it can only be consumed a single time.
 		payload, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
-		apiErr := newAPIError(method, path, resp.StatusCode, payload)
+		apiErr := newAPIError(method, safePath, resp.StatusCode, payload)
 		if resp.StatusCode == http.StatusTooManyRequests {
 			return retryAfter(resp.Header, payload), apiErr
 		}
@@ -214,9 +218,47 @@ func (c *Client) attempt(ctx context.Context, method, path string, body []byte, 
 		return 0, nil
 	}
 	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-		return 0, fmt.Errorf("decode %s %s response: %w", method, path, err)
+		return 0, fmt.Errorf("decode %s %s response: %w", method, safePath, err)
 	}
 	return 0, nil
+}
+
+// redacted replaces a credential that must not reach a log.
+const redacted = "REDACTED"
+
+// redactPath strips credentials out of a request path so the result is safe to
+// log. Two Discord endpoints carry one in the URL itself:
+//
+//	/interactions/{id}/{token}/callback
+//	/webhooks/{application_id}/{token}/...
+//
+// That token is bearer-equivalent — it authorises posting messages as the bot
+// until it expires — and these paths end up in error messages, which the bot
+// logs. The surrounding ids are kept: they identify the failed request without
+// granting anything.
+func redactPath(path string) string {
+	segments := strings.Split(path, "/")
+
+	// A leading slash makes segments[0] empty, so the resource is at index 1 and
+	// the token, where there is one, at index 3.
+	if len(segments) > 3 && (segments[1] == "interactions" || segments[1] == "webhooks") {
+		segments[3] = redacted
+	}
+	return strings.Join(segments, "/")
+}
+
+// withoutURL returns the cause inside a [*url.Error], discarding the wrapper.
+//
+// net/http reports transport failures as a *url.Error whose message quotes the
+// entire request URL, which would put the credential back into the log that
+// [redactPath] just took out of it. Unwrapping keeps the useful part — the dial
+// or timeout error — and every errors.Is target underneath it.
+func withoutURL(err error) error {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		return urlErr.Err
+	}
+	return err
 }
 
 // newAPIError builds an error from a failed response, folding in Discord's JSON
