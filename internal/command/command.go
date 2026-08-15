@@ -33,7 +33,7 @@ type Command struct {
 // All returns every command the bot publishes. Add new commands here — it is the
 // only list the bot reads.
 func All() []Command {
-	return []Command{ping()}
+	return []Command{ping(), test()}
 }
 
 // Definitions returns just the command definitions, in the order All returns them.

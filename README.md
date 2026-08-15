@@ -1,8 +1,9 @@
 # cnayp-discord-bot
 
 A Discord bot in Go with **no external dependencies** — the WebSocket transport (RFC 6455) and the
-Discord API client are implemented here on top of the standard library. It currently serves a single
-`/ping` slash command and is meant as a base to grow from.
+Discord API client are implemented here on top of the standard library. It currently serves two
+slash commands — `/ping`, which reports gateway latency to the channel, and `/test`, an ephemeral
+deploy smoke check — and is meant as a base to grow from.
 
 It runs for the **Cloud Native Ayacucho Community (CNAYP)**, a volunteer community that meets to
 learn about cloud native technologies, and is used for educational and informational purposes only.
