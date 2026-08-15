@@ -31,15 +31,17 @@ It is an independent project, not endorsed by or affiliated with the CNCF, the L
    make run
    ```
 
-Set `DISCORD_GUILD_ID` to a server id during development: guild-scoped commands appear immediately,
-while global ones can take up to an hour to propagate.
+`DISCORD_GUILD_ID` is set in `secrets/prod.enc.yaml`, so both `make run` and the deployed container
+register the commands in the CNAYP guild rather than globally. That is deliberate: the bot serves one
+community, and a guild-scoped bulk overwrite takes effect immediately where a global one needs up to
+an hour to propagate. Unset it only if the bot is ever meant to serve servers beyond CNAYP.
 
 ## Configuration
 
 | Variable           | Required | Default | Description                                        |
 | ------------------ | -------- | ------- | -------------------------------------------------- |
 | `DISCORD_TOKEN`    | yes      | —       | Bot token from the developer portal.                |
-| `DISCORD_GUILD_ID` | no       | global  | Restrict command registration to one guild.         |
+| `DISCORD_GUILD_ID` | no       | global  | Guild to register commands in. Set to the CNAYP guild — see above. |
 | `LOG_LEVEL`        | no       | `info`  | `debug`, `info`, `warn` or `error`.                 |
 
 ## Layout
