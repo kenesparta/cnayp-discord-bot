@@ -26,7 +26,7 @@ the server — the last line promises exactly that.
 ```
 # 📜 Rules — Cloud Native Ayacucho Community (CNAYP)
 
-Welcome! We are a volunteer community learning about cloud native technologies. This server is **educational and informational**: we are here to learn, and to help other people learn.
+Welcome! We are a volunteer community that learns and shares knowledge about cloud native technologies. This server is **educational and informational**: we are here to learn, to share what we know with the community, and to help other people learn.
 
 By taking part you agree to these rules and to the **CNCF Code of Conduct** (v1.3):
 https://github.com/cncf/foundation/blob/main/code-of-conduct.md

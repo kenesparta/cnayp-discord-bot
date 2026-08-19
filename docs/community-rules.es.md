@@ -26,7 +26,7 @@ en el servidor — la última línea lo promete.
 ```
 # 📜 Reglas — Cloud Native Ayacucho Community (CNAYP)
 
-¡Bienvenido, bienvenida! Somos una comunidad de voluntarios que aprende sobre tecnologías cloud native. Este servidor es **educativo e informativo**: venimos a aprender y a ayudar a otras personas a aprender.
+¡Bienvenido, bienvenida! Somos una comunidad de voluntarios que aprende y comparte conocimiento sobre tecnologías cloud native. Este servidor es **educativo e informativo**: venimos a aprender, a compartir lo que sabemos con la comunidad y a ayudar a otras personas a aprender.
 
 Al participar aceptas estas reglas y el **Código de Conducta de la CNCF** (v1.3):
 https://github.com/cncf/foundation/blob/main/code-of-conduct.md
