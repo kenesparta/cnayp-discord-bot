@@ -17,7 +17,8 @@ Discord actually renders is used (`#` headers, `-#` subtext, bold, lists, blockq
 **Server Settings → Community → Rules**.
 
 This file is the source of truth: edit here, then re-post. If you change the rules, announce it in
-the server — the last line promises exactly that.
+the server — the last line promises exactly that — and check that the one-message summary in
+[`community-rules-short.en.md`](community-rules-short.en.md) still tells them right.
 
 ---
 
