@@ -17,12 +17,33 @@ la versión completa, revisa que las reglas condensadas de abajo la sigan contan
 
 | Sección | Pantalla | Límite |
 | --- | --- | --- |
+| Descripción corta | Ajustes del servidor → **Overview** → *Server Description* (sale en la invitación y en Discovery) | 120 caracteres |
+| Descripción larga | el campo *description* del **Rules Screening**, del **Welcome Screen** y de **Discovery** | ~300 caracteres |
 | Cartel de bienvenida | Ajustes del servidor → Comunidad → **Onboarding** → Server Guide → *Welcome Sign* | ~300 caracteres, sin markdown |
 | Tareas para nuevos miembros | misma pantalla → *New Member To Do's* | cada tarea enlaza a un canal |
 | Recursos | misma pantalla → *Resources* | enlaces fijos |
 | Reglas condensadas | Ajustes del servidor → Moderación → **Safety Setup** → *Rules Screening* → Enable → Edit rules | ~300 caracteres por regla, texto plano, una lengua |
 
 ---
+
+## Descripción del servidor
+
+Discord pide una descripción en varios sitios con dos tamaños. La corta va en *Server Description*
+(Overview) y es la que ve quien recibe una invitación; la larga cabe en el campo *description* del
+Rules Screening, del Welcome Screen y de Discovery. Las dos dicen lo mismo que la primera frase del
+cartel de bienvenida; si cambia una, cambian todas.
+
+Corta, 110 caracteres:
+
+```
+Comunidad de voluntarios de Ayacucho que aprende y comparte conocimiento sobre cloud native. Español e inglés.
+```
+
+Larga, 278 caracteres:
+
+```
+Comunidad de voluntarios que aprende y comparte conocimiento sobre cloud native: Kubernetes, contenedores, observabilidad, certificaciones y más. Sin preguntas tontas, sin spam, sin dumps de examen. Español e inglés bienvenidos. Nos regimos por el Código de Conducta de la CNCF.
+```
 
 ## Cartel de bienvenida (Welcome Sign)
 
@@ -69,8 +90,8 @@ mensajes completos.
 
 Cada línea numerada es **una regla aparte** en el formulario; pégalas sin el número. Es texto plano:
 no se renderiza markdown ni se convierten las menciones de canal, así que `#reglas` queda como texto
-y sirve solo de pista. Añade también la descripción del servidor que pide el formulario; vale la
-primera frase del cartel de bienvenida.
+y sirve solo de pista. En la descripción del servidor que pide el formulario va la descripción
+larga de arriba.
 
 ```
 1. Respeto ante todo: empatía, amabilidad y lenguaje inclusivo. Nada de insultos, acoso, ataques personales o políticos ni contenido sexualizado. Aplica el Código de Conducta de la CNCF v1.3.
