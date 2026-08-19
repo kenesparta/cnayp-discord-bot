@@ -18,7 +18,9 @@ reglas en **Ajustes del servidor → Comunidad → Reglas**.
 
 Este archivo es la fuente de verdad: edita aquí y vuelve a publicar. Si cambias las reglas, anúncialo
 en el servidor — la última línea lo promete — y revisa que el resumen de un solo mensaje en
-[`community-rules-short.es.md`](community-rules-short.es.md) siga contándolas bien.
+[`community-rules-short.es.md`](community-rules-short.es.md) siga contándolas bien. Lo que Discord
+muestra a quien entra —cartel de bienvenida, tareas para nuevos miembros y las reglas condensadas del
+Rules Screening— está en [`onboarding.es.md`](onboarding.es.md).
 
 ---
 
