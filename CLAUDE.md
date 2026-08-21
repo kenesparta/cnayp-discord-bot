@@ -47,7 +47,7 @@ cmd/bot            main(): config → signals → run() → exit code
   └── internal/bot        command registry, interaction routing, publishing
         └── internal/command   one file per slash command; All() is the registry
         └── internal/announce  the daily event announcer: schedule, delta, rendering
-              └── internal/events    the two public event calendars (no Discord in it)
+              └── internal/events    the three public event calendars (no Discord in it)
         └── internal/discord   REST client + gateway session (the Discord protocol)
               └── internal/websocket   RFC 6455 client (the transport)
 ```
@@ -110,7 +110,7 @@ Timing-sensitive gateway tests use short heartbeat intervals; they have been run
 `site/` holds the Terms of Service and Privacy Policy the Discord developer portal links to, served
 from S3 behind CloudFront at `cnayp-bot.kenesparta.dev`. **The bot process serves no HTTP at all** —
 it has no listener, no `EXPOSE`, and no published ports. It dials *out* to Discord and, once a day,
-to the two public event calendars in `internal/events`. The site is an entirely separate static
+to the three public event calendars in `internal/events`. The site is an entirely separate static
 deploy; do not add an HTTP server to the bot to host these.
 
 The HTML in `site/` is the single source of truth — there is deliberately no Markdown copy, because
@@ -128,7 +128,7 @@ description, which lives in the Developer Portal rather than in git. It is trans
 to be updated by hand, and CI cannot catch a drift.
 
 The Privacy Policy makes specific factual claims about the bot's behaviour: `GUILDS` intent only, no
-persistent storage, no permission to read message history, an outbound call to exactly two public
+persistent storage, no permission to read message history, an outbound call to exactly three public
 event calendars, and logs that record command *names* and run counts but not argument values, user
 IDs, usernames, or anything an event's organiser wrote. Any change to intents, storage, outbound
 hosts, or the fields passed to `logger.*` falsifies one of those claims — update `site/privacy.html`

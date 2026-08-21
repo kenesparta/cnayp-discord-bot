@@ -45,11 +45,11 @@
   </ul>
   <p><strong>Connection metadata.</strong> While connected, the Bot receives gateway events
   describing which servers it is in and whether they are available.</p>
-  <p><strong>Public event listings.</strong> Once a day the Bot fetches two public listings of
-  upcoming cloud native events &mdash; the CNCF community group calendar and the Linux
-  Foundation&rsquo;s conference calendar &mdash; so that it can announce them. Nothing about you is
-  sent in those requests, and nothing about you comes back: they are the same public pages anyone can
-  open in a browser.</p>
+  <p><strong>Public event listings.</strong> Once a day the Bot fetches three public listings of
+  upcoming cloud native events &mdash; the CNCF community group calendar, the CNCF website&rsquo;s
+  listing of community-run Kubernetes Community Days, and the Linux Foundation&rsquo;s conference
+  calendar &mdash; so that it can announce them. Nothing about you is sent in those requests, and
+  nothing about you comes back: they are the same public pages anyone can open in a browser.</p>
 
   <h2>What the Bot cannot see</h2>
   <p>The Bot connects with the <code>GUILDS</code> gateway intent only. It does <strong>not</strong>
@@ -94,9 +94,10 @@
     (CloudWatch Logs, seven-day retention) and serves this website. Standard web access logs may be
     produced for the pages you are reading now; they are not linked to your Discord account.</li>
     <li><strong>The event calendars</strong> the Bot reads once a day: the CNCF community group
-    calendar, run by the Open Community Groups project, and the Linux Foundation&rsquo;s conference
-    calendar. The Bot only reads their public listings. It sends them nothing about you, holds no
-    account with either, and neither of them learns that you exist.</li>
+    calendar, run by the Open Community Groups project; the CNCF website; and the Linux
+    Foundation&rsquo;s conference calendar. The Bot only reads their public listings. It sends them
+    nothing about you, holds no account with any of them, and none of them learns that you
+    exist.</li>
   </ul>
   <p>There are no analytics services, advertising networks, or trackers. We do not sell, rent, or
   trade data, and we do not use it to train machine learning models. Because the Bot is an

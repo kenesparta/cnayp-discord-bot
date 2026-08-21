@@ -3,8 +3,9 @@
 A Discord bot in Go with **no external dependencies** — the WebSocket transport (RFC 6455), the
 Discord API client and the event calendar clients are implemented here on top of the standard
 library. It serves two slash commands — `/ping`, which reports gateway latency to the channel, and
-`/test`, an ephemeral deploy smoke check — and, once a day, posts upcoming cloud native events from
-the public CNCF and Linux Foundation calendars into one channel.
+`/test`, an ephemeral deploy smoke check — and, once a day, posts upcoming cloud native events into
+one channel, merged from three public calendars: the CNCF community groups, the Kubernetes Community
+Days, and the Linux Foundation's conferences.
 
 It runs for the **Cloud Native Ayacucho Community (CNAYP)**, a volunteer community that meets to
 learn about cloud native technologies, and is used for educational and informational purposes only.
@@ -118,7 +119,7 @@ Discord requires a Terms of Service and Privacy Policy URL for the application. 
 - Privacy Policy — https://cnayp-bot.kenesparta.dev/privacy.html
 
 The bot itself serves no HTTP and has no listener; it dials out to Discord and, once a day, to the
-two public event calendars it announces from. The site is a separate static deploy,
+three public event calendars it announces from. The site is a separate static deploy,
 run by `.github/workflows/site.yml` on `v*` tags — a legal document goes live because a release was
 cut, not because `main` moved. It authenticates to AWS by assuming an IAM role through GitHub's OIDC
 provider, so no AWS access keys exist on either side.
@@ -150,7 +151,7 @@ python3 -m http.server -d site 8000    # http://localhost:8000/terms.html
 
 Both documents describe the bot's actual data handling, which follows from the `GUILDS`-only gateway
 intent, the absence of any persistent storage, and the fact that the only hosts it talks to are
-Discord and the two public event calendars. **Changing any of those — widening intents, adding a
+Discord and the three public event calendars. **Changing any of those — widening intents, adding a
 database or a cache, logging new fields, calling a new third-party host, or posting somewhere new —
 means updating the Privacy Policy in the same change.**
 
