@@ -38,37 +38,46 @@ missing mandatory fields. See §5 Contract A of the spec.
 category filter, multi-layout date parsing, explicit handling of the placeholder date, and mapping of the location
 object onto the event's place and attendance kind. See §5 Contract B of the spec.
 
-**6. Time zone database** — Add the blank time zone data import to the binary's entry point, with a comment naming the
+**6. Community days client** — Implement the client for the CNCF website's community-hosted listing, which is in
+practice the Kubernetes Community Days: one taxonomy-filtered request per page, HTML-entity decoding of titles,
+floating date parsing shared with the conference client, and paging until a short page. See §5 Contract C of the spec
+for why the taxonomy filter is the only one worth sending.
+
+**7. Time zone database** — Add the blank time zone data import to the binary's entry point, with a comment naming the
 static base image as the reason, so that the local-day computation resolves every zone name the feeds use rather than
 only the ones the container happens to ship.
 
 ### Phase 3: Normalization
 
-**7. Status and time filtering** — Remove the records the FR excludes — canceled, test, unpublished, and any whose
+**8. Status and time filtering** — Remove the records the FR excludes — canceled, test, unpublished, and any whose
 start has already passed relative to the single clock reading taken at the start of the run.
 
-**8. Series collapsing** — Reduce each recurring series to its next occurrence, preferring the identifier the source
+**9. Series collapsing** — Reduce each recurring series to its next occurrence, preferring the identifier the source
 publishes and falling back to the organizing group combined with a normalized title. See §3 of the spec for why the
 fallback normalization strips case, punctuation and trailing occurrence numbering.
 
-**9. Text sanitization** — Strip control and zero-width characters from upstream text, collapse whitespace, and
+**10. Text sanitization** — Strip control and zero-width characters from upstream text, collapse whitespace, and
 truncate titles to the FR's character budget at a word boundary with a visible ellipsis. Markup escaping is
 deliberately not done here; it belongs to the renderer in FR-0002.
 
-**10. Local day and ordering** — Compute each event's own calendar day from its published time zone, degrading to UTC
+**11. Local day and ordering** — Compute each event's own calendar day from its published time zone, degrading to UTC
 when the zone name is unknown, and sort the merged set by start instant.
+
+**12. Cross-calendar de-duplication** — Reduce an event that two calendars both carry to a single listing, matching on
+a canonical title and the day it starts, and keeping whichever record carries the most: a start time, a venue, an
+organizer. See §3 of the spec for the case this exists for and the one cost it accepts.
 
 ### Phase 4: Collection and guards
 
-**11. Collector** — Introduce the type that owns both source clients, fetches them one after the other, feeds their
+**13. Collector** — Introduce the type that owns the source clients, fetches them one after another, feeds their
 output through normalization and returns the resulting set together with a health report per source. A failure of one
-source must never prevent the other from contributing.
+source must never prevent the others from contributing.
 
-**12. Health guards** — Add the two guards that make a silent upstream failure loud: a well-formed response carrying
+**14. Health guards** — Add the two guards that make a silent upstream failure loud: a well-formed response carrying
 no records is a failure rather than a quiet day, and a record count that collapses relative to that source's last
 successful run is treated as suspect. Both discard the affected source's contribution for the run and leave the
 baseline untouched. See §6 of the spec for the state these guards hold.
 
-**13. Scheduled contract check** — Add the build-tagged check that exercises both live endpoints and the assumptions
+**15. Scheduled contract check** — Add the build-tagged check that exercises the live endpoints and the assumptions
 the guards depend on, plus the workflow that runs it on a schedule. It must stay out of the normal test command so
 that an upstream outage never fails a build.

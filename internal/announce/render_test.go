@@ -59,11 +59,11 @@ func TestRenderDailyIsEmptyWhenNothingIsNew(t *testing.T) {
 	}
 }
 
-func TestRenderNamesBothCalendars(t *testing.T) {
+func TestRenderNamesEveryCalendarItReadsFrom(t *testing.T) {
 	messages := renderDaily(events.Set{event(events.SourceCommunity, "a", 3)})
 
 	content := messages[len(messages)-1].Content
-	for _, want := range []string{"CNCF Community Groups", "Linux Foundation Events"} {
+	for _, want := range []string{"CNCF Community Groups", "CNCF Events", "Linux Foundation Events"} {
 		if !strings.Contains(content, want) {
 			t.Errorf("message does not attribute %q:\n%s", want, content)
 		}

@@ -32,13 +32,33 @@ func (s *stubCalendar) fetch(_ context.Context, _ time.Time) ([]Event, int, erro
 
 func (s *stubCalendar) name() Source { return s.source }
 
-// collectorWith builds a collector over two stub calendars.
-func collectorWith(community, conference *stubCalendar) *Collector {
+// collectorWith builds a collector over stub calendars, in the order given.
+func collectorWith(calendars ...*stubCalendar) *Collector {
+	over := make([]calendar, 0, len(calendars))
+	for _, stub := range calendars {
+		over = append(over, stub)
+	}
 	return &Collector{
-		community:  community,
-		conference: conference,
-		logger:     discardLogger(),
-		lastGood:   make(map[Source]int, 2),
+		calendars: over,
+		logger:    discardLogger(),
+		lastGood:  make(map[Source]int, len(calendars)),
+	}
+}
+
+// kcdEventAt builds a published Kubernetes Community Day some days out. Like a
+// conference record it carries a bare date and no clock time.
+func kcdEventAt(id string, days int) Event {
+	start := runClock.AddDate(0, 0, days)
+	return Event{
+		Source:    SourceKCD,
+		ID:        id,
+		Title:     "KCD Ayacucho " + id,
+		Start:     start,
+		LocalDay:  start,
+		Kind:      KindInPerson,
+		Place:     "Ayacucho",
+		URL:       "https://www.cncf.io/events/kcd-ayacucho-" + id + "/",
+		published: true,
 	}
 }
 
@@ -54,17 +74,19 @@ func conferenceEventAt(id string, days int) Event {
 	}
 }
 
-func TestCollectMergesBothCalendars(t *testing.T) {
+func TestCollectMergesEveryCalendar(t *testing.T) {
 	community := &stubCalendar{source: SourceCommunity, events: []Event{communityEventAt("a", 3)}}
 	conference := &stubCalendar{source: SourceConference, events: []Event{conferenceEventAt("b", 10)}}
 
-	set, health := collectorWith(community, conference).Collect(t.Context(), runClock)
+	kcd := &stubCalendar{source: SourceKCD, events: []Event{kcdEventAt("c", 40)}}
 
-	if len(set) != 2 {
-		t.Fatalf("collected %d events, want 2", len(set))
+	set, health := collectorWith(community, conference, kcd).Collect(t.Context(), runClock)
+
+	if len(set) != 3 {
+		t.Fatalf("collected %d events, want 3", len(set))
 	}
-	if len(health) != 2 {
-		t.Fatalf("reported %d calendars, want 2", len(health))
+	if len(health) != 3 {
+		t.Fatalf("reported %d calendars, want 3", len(health))
 	}
 	for _, report := range health {
 		if !report.OK() {
@@ -192,7 +214,7 @@ func TestCollectReportsSkippedRecords(t *testing.T) {
 	}
 }
 
-func TestNewReadsBothCalendarsOverOneClient(t *testing.T) {
+func TestNewReadsEveryCalendarOverOneClient(t *testing.T) {
 	var paths []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		paths = append(paths, r.URL.Path)
@@ -209,12 +231,13 @@ func TestNewReadsBothCalendarsOverOneClient(t *testing.T) {
 		WithHTTPClient(srv.Client()),
 		WithCommunityBaseURL(srv.URL),
 		WithConferenceBaseURL(srv.URL),
+		WithKCDBaseURL(srv.URL),
 	)
 
 	set, health := collector.Collect(t.Context(), runClock)
 
-	if len(paths) != 2 {
-		t.Fatalf("requested %v, want both calendars", paths)
+	if len(paths) != 3 {
+		t.Fatalf("requested %v, want all three calendars", paths)
 	}
 	if len(set) != 0 {
 		t.Errorf("collected %d events from empty calendars, want none", len(set))

@@ -68,7 +68,7 @@ func normalize(raw []Event, now time.Time) (Set, []string) {
 		kept = append(kept, event)
 	}
 
-	set := collapse(kept)
+	set := dedupeAcrossSources(collapse(kept))
 	sortByStart(set)
 	return set, unknownZones
 }
@@ -117,6 +117,89 @@ func collapse(events []Event) Set {
 		}
 	}
 	return set
+}
+
+// dedupeAcrossSources removes the second listing of an event that two different
+// calendars both carry.
+//
+// It exists for one real case: a Kubernetes Community Day appears on the CNCF
+// website, and appears again on the community group calendar when its
+// organizers also run a group. The two spell it differently — "KCD Gujarat
+// 2026" against "Kubernetes Community Day Gujarat 2026" — so the match is made
+// on a canonical title plus the day it starts, which is specific enough that
+// two genuinely different events would have to share a name and a date to
+// collide.
+//
+// The richer record wins: the community listing carries an exact start time, a
+// venue and an organizing group where the website listing carries a bare date.
+// The cost of that preference is a known edge: an event that is listed on the
+// website first and joins the community calendar later changes which record
+// represents it, and is therefore announced a second time. It happens at most
+// once per event, only for the handful of events both calendars carry, and the
+// alternative — preferring the poorer record — would trade it for permanently
+// worse announcements.
+//
+// Two entries from the same calendar are left alone: collapsing series is that
+// calendar's business and has already happened.
+func dedupeAcrossSources(set Set) Set {
+	first := make(map[string]int, len(set))
+	deduped := make(Set, 0, len(set))
+
+	for _, event := range set {
+		key := crossSourceKey(event)
+		if key == "" {
+			deduped = append(deduped, event)
+			continue
+		}
+
+		index, seen := first[key]
+		if !seen {
+			first[key] = len(deduped)
+			deduped = append(deduped, event)
+			continue
+		}
+		if deduped[index].Source == event.Source {
+			deduped = append(deduped, event)
+			continue
+		}
+		if richer(event, deduped[index]) {
+			deduped[index] = event
+		}
+	}
+	return deduped
+}
+
+// crossSourceKey identifies an event well enough to recognise it on another
+// calendar. It is empty for an event with no settled date, which cannot be
+// matched on one.
+func crossSourceKey(event Event) string {
+	if event.DateTBA || event.Start.IsZero() {
+		return ""
+	}
+	return canonicalTitle(event.Title) + "|" + event.Start.UTC().Format(time.DateOnly)
+}
+
+// communityDayNames rewrites what one calendar spells out and the other
+// abbreviates. KCD is the abbreviation of Kubernetes Community Day, and the two
+// calendars do not agree on which to use.
+var communityDayNames = strings.NewReplacer(
+	"kubernetes community days", "kcd",
+	"kubernetes community day", "kcd",
+)
+
+// canonicalTitle normalizes a title far enough that two calendars naming the
+// same event arrive at the same string.
+func canonicalTitle(title string) string {
+	return communityDayNames.Replace(normalizeTitle(title))
+}
+
+// richer reports whether candidate carries more than current: an exact start
+// beats a bare date, and a venue beats nothing.
+func richer(candidate, current Event) bool {
+	if candidate.Exact != current.Exact {
+		return candidate.Exact
+	}
+	return current.Place == "" && candidate.Place != ""
 }
 
 // collapseKey is the identity of a series. It is qualified by source, so that

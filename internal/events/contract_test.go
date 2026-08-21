@@ -107,3 +107,51 @@ func TestContractConferenceRejectsTheDefaultUserAgent(t *testing.T) {
 		t.Errorf("status = %d with the runtime's default agent, want 403", resp.StatusCode)
 	}
 }
+
+func TestContractKCDCalendarAnswersWithCommunityDays(t *testing.T) {
+	source := newKCDSource(&http.Client{Timeout: requestTimeout}, defaultUserAgent, "")
+
+	collected, skipped, err := source.fetch(t.Context(), time.Now())
+	if err != nil {
+		t.Fatalf("fetch() = %v, want nil", err)
+	}
+
+	// 61 records all time, 13 of them still to come, when this was written. The
+	// listing includes the past, so the floor is against the whole corpus.
+	if len(collected) < 30 {
+		t.Errorf("collected %d events, want at least 30: the host taxonomy may have changed", len(collected))
+	}
+	if skipped > len(collected)/10 {
+		t.Errorf("skipped %d records: the meta shape has changed", skipped)
+	}
+
+	upcoming := 0
+	for _, event := range collected {
+		if event.Start.After(time.Now()) {
+			upcoming++
+		}
+	}
+	if upcoming == 0 {
+		t.Error("no upcoming community days at all, which has not been true since the listing existed")
+	}
+}
+
+func TestContractKCDTaxonomyStillMeansCommunityHosted(t *testing.T) {
+	// The whole source rests on one magic number. If the term is renamed or
+	// renumbered, the listing silently becomes something else.
+	source := newKCDSource(&http.Client{Timeout: requestTimeout}, defaultUserAgent, "")
+
+	var term struct {
+		ID   int    `json:"id"`
+		Name string `json:"name"`
+		Slug string `json:"slug"`
+	}
+	endpoint := kcdBaseURL + "/wp-json/wp/v2/lf-event-host/" + kcdHostTerm + "?_fields=id,name,slug"
+	if err := source.get(t.Context(), endpoint, &term); err != nil {
+		t.Fatalf("get() = %v, want nil", err)
+	}
+
+	if term.Slug != "community-hosted" {
+		t.Errorf("term %s is now %q (%s), not the community-hosted listing", kcdHostTerm, term.Name, term.Slug)
+	}
+}

@@ -47,12 +47,12 @@ func TestLFEventsParsesEveryKnownDateLayout(t *testing.T) {
 
 	for name, raw := range tests {
 		t.Run(name, func(t *testing.T) {
-			parsed, ok := parseConferenceDate(raw)
+			parsed, ok := parseFloatingDate(raw)
 			if !ok {
-				t.Fatalf("parseConferenceDate(%q) failed", raw)
+				t.Fatalf("parseFloatingDate(%q) failed", raw)
 			}
 			if !parsed.Equal(want) {
-				t.Errorf("parseConferenceDate(%q) = %v, want %v", raw, parsed, want)
+				t.Errorf("parseFloatingDate(%q) = %v, want %v", raw, parsed, want)
 			}
 		})
 	}

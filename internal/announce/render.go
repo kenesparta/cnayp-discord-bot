@@ -48,7 +48,7 @@ const (
 	headingDigest  = "🗓️ **Esta semana** · **This week**"
 	headingHorizon = "🌎 **En el horizonte** · **On the horizon**"
 	emptyWeek      = "_No hay eventos programados para esta semana._\n_No events are scheduled for this week._"
-	attribution    = "-# Fuente · Source: CNCF Community Groups · Linux Foundation Events"
+	attribution    = "-# Fuente · Source: CNCF Community Groups · CNCF Events · Linux Foundation Events"
 	markerTBA      = "fecha por confirmar · date TBA"
 	markerOnline   = "en línea · online"
 	overflowLine   = "-# … y %d más · and %d more: %s"
@@ -132,14 +132,17 @@ func week(set events.Set, now time.Time) events.Set {
 	return within
 }
 
-// horizon returns the flagship conferences worth knowing about months ahead:
-// the ones a member would submit a talk to, travel to, or organize a watch
-// party around. Without it a conference only ever surfaces in the week it
-// happens, which is too late to be useful.
+// horizon returns the conferences worth knowing about months ahead: the ones a
+// member would submit a talk to, travel to, or organize a watch party around.
+// Without it a conference only ever surfaces in the week it happens, which is
+// too late to be useful.
+//
+// It covers both the flagship events and the Kubernetes Community Days, which
+// for a regional community are frequently the more relevant of the two.
 func horizon(set events.Set) events.Set {
 	var conferences events.Set
 	for _, event := range set {
-		if event.Source == events.SourceConference {
+		if event.Conference() {
 			conferences = append(conferences, event)
 		}
 	}

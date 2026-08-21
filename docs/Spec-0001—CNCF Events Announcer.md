@@ -13,9 +13,9 @@
 ## 1. Executive summary
 
 The CNCF Events Announcer is a scheduled capability added to the existing Cloud Native Ayacucho Community (CNAYP)
-Discord bot. Once a day it reads two public listings of upcoming cloud native events — the CNCF community-group
-calendar and the Linux Foundation's CNCF conference calendar — and publishes what it finds into a single announcements
-channel, in Spanish and English.
+Discord bot. Once a day it reads three public listings of upcoming cloud native events — the CNCF community-group
+calendar, the Linux Foundation's CNCF conference calendar, and the CNCF website's listing of community-run
+Kubernetes Community Days — and publishes what it finds into a single announcements channel, in Spanish and English.
 
 It is written for members of a volunteer community who want to know which meetups, Kubernetes Community Days and
 KubeCon editions are coming up worldwide, without following a dozen calendars themselves. The differentiator is
@@ -38,7 +38,9 @@ channel it posts into.
 - Regional relevance is invisible from a raw calendar: of those 98 events, 0 are in Peru and 11 are in Latin America,
   so a member scanning the list gets no signal about what they could realistically attend.
 - Flagship conferences — KubeCon and its co-located days — live in a completely separate listing from local meetups,
-  so a member watching one calendar systematically misses the other.
+  so a member watching one calendar systematically misses the other. The Kubernetes Community Days, which are the
+  events closest to what a regional community could attend or emulate, are in a third listing again and appear in
+  neither of the first two.
 - Announcement channels decay into noise: a quarter of the community-group calendar is a handful of recurring working
   group calls, and any naive "post the calendar" bot would repeat them weekly until the channel is muted.
 - The community has no reliable heartbeat for event news; announcements happen when a volunteer remembers to make one.
@@ -157,8 +159,8 @@ can plan a talk submission, a trip or a watch party instead of learning about Ku
 
 Criteria:
 
-- AC-0003.01 — The Monday digest ends with a horizon block listing flagship conferences starting within the next 6
-  months.
+- AC-0003.01 — The Monday digest ends with a horizon block listing conferences — flagship and community-run alike —
+  starting within the next 6 months.
 - AC-0003.02 — The horizon block lists at most 5 conferences, the soonest first.
 - AC-0003.03 — Each horizon entry shows the conference name, its date range and its city and country, or a virtual
   marker when the source declares the event virtual.
@@ -286,6 +288,13 @@ published, organizing group name and identifier, series identifier when publishe
 event page address. The upstream returns roughly 98 events in a six-month window today, in a response of roughly
 360 KB, most of it a pre-rendered markup blob that is discarded on read.
 
+*Community days source.* Reads the CNCF website's event listing restricted to its community-hosted host category,
+which is in practice the Kubernetes Community Days: currently 61 records of which 13 are still to come, including the
+São Paulo and Panamá editions. The listing carries every community-hosted event ever held and offers no way to ask
+for the upcoming ones — its date parameters are accepted and silently ignored — so the window is applied afterwards
+like it is for every other calendar. Titles arrive as HTML and are decoded; dates are floating calendar dates in any
+of three layouts.
+
 *Flagship conference source.* Reads the Linux Foundation conference listing restricted to the CNCF conference
 category, which returns the KubeCon editions and the CNCF-hosted co-located days, currently 24 events in a six-month
 window. The listing returns upcoming events only and is not paged. It yields, per record, an upstream identifier,
@@ -293,6 +302,12 @@ name, start date, end date, city, region, country, an explicit virtual flag, and
 Dates from this source are calendar dates with no clock time and no time zone, and are treated as such throughout. A
 record whose start date is the literal "to be announced" placeholder is kept and marked, not dropped and not given an
 invented date.
+
+*Cross-calendar de-duplication.* An event that two calendars both carry is listed once. The case that occurs is a
+Kubernetes Community Day appearing both on the CNCF website and on the community-group calendar, where the two spell
+it differently — "KCD Gujarat 2026" against "Kubernetes Community Day Gujarat 2026" — so the match is made on a
+canonical title, in which the spelled-out form is reduced to its abbreviation, together with the day the event starts.
+Where both exist, the richer record survives: the one with an exact start time, a venue and an organizing group.
 
 *Request discipline.* Each source is fetched at most once per scheduled run, i.e. at most once a day. Every request
 identifies the bot with a descriptive agent string carrying a contact address; the conference source rejects the
@@ -376,8 +391,8 @@ line with a count and a link to the source listing.
 
 *Weekly digest.* On a Monday run, a digest is published first, listing every entry whose local start day falls within
 the seven days beginning on the day of the run, ordered by start instant. When that list is empty the digest says so
-rather than being omitted. The digest closes with a horizon block listing at most 5 flagship conferences starting
-within the next six months, soonest first, each with its name, date range and place or virtual marker, and with an
+rather than being omitted. The digest closes with a horizon block listing at most 5 conferences — flagship and
+community-run alike — starting within the next six months, soonest first, each with its name, date range and place or virtual marker, and with an
 explicit "date to be announced" marker where the source publishes no confirmed date; the block is omitted entirely
 when no conference falls within the horizon. The digest is computed only from the current event set, so it publishes
 even on the first run after a restart.
@@ -514,17 +529,15 @@ graph TD
 - Editing or maintaining a single living message, and pinning.
 - Reading the announcement channel's history, and any permission that would allow it.
 - Persistent de-duplication across restarts, and therefore any state file, cache or volume.
-- The Kubernetes Community Days listing published on the CNCF website, which the two chosen sources do not fully
-  cover.
 - The retired CNCF community platform's interface, which its operators disallow for automated access.
 - Translating upstream event titles or descriptions.
 - Any second announcement channel, and any per-server configuration.
 - Session-level conference programme data.
 
 > [!question] Pending decisions
-> Should anything from "out of scope" make it into v1? The Kubernetes Community Days listing is the one worth a second
-> look: it carries 13 KCD editions in the current six-month window that the two chosen sources miss, and KCDs are the
-> event class closest to a regional community. Review before closing the PRD.
+> Should anything from "out of scope" make it into v1? The Kubernetes Community Days listing was the open question
+> here, and it has been resolved by adding it as a third calendar. The remaining candidate is per-member or
+> per-region filtering, which would turn one shared channel into a subscription service and is deliberately left out.
 
 ## 10. Glossary
 
@@ -538,6 +551,8 @@ graph TD
 - **KCD** — Kubernetes Community Day, a regional community-run conference.
 - **Co-located day** — a single-topic event held alongside a flagship conference.
 - **Community group** — a local CNCF chapter that organizes meetups.
+- **Community-hosted** — the CNCF website's category for events run by the community rather than by the foundation;
+  in practice, the Kubernetes Community Days.
 - **Delta** — the set of events present in the current run and absent from the previous one.
 - **Digest** — the weekly summary of the coming seven days.
 - **Horizon block** — the digest's closing list of flagship conferences within six months.

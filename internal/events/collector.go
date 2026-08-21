@@ -62,10 +62,9 @@ func (f fetcher) name() Source { return f.source }
 // A Collector is driven by a single runner: [Collector.Collect] is not safe for
 // concurrent use.
 type Collector struct {
-	community  calendar
-	conference calendar
-	logger     *slog.Logger
-	lastGood   map[Source]int
+	calendars []calendar
+	logger    *slog.Logger
+	lastGood  map[Source]int
 }
 
 // settings are the defaults [New] applies, and what an [Option] overrides.
@@ -74,6 +73,7 @@ type settings struct {
 	userAgent      string
 	communityBase  string
 	conferenceBase string
+	kcdBase        string
 }
 
 // An Option overrides a [Collector] default.
@@ -102,6 +102,12 @@ func WithConferenceBaseURL(baseURL string) Option {
 	return func(s *settings) { s.conferenceBase = baseURL }
 }
 
+// WithKCDBaseURL points the Kubernetes Community Days calendar at another host,
+// without a trailing slash.
+func WithKCDBaseURL(baseURL string) Option {
+	return func(s *settings) { s.kcdBase = baseURL }
+}
+
 // New returns a collector reading both calendars. It does not touch the
 // network; [Collector.Collect] does.
 func New(logger *slog.Logger, opts ...Option) *Collector {
@@ -114,10 +120,13 @@ func New(logger *slog.Logger, opts ...Option) *Collector {
 	}
 
 	return &Collector{
-		community:  newCommunitySource(applied.httpClient, applied.userAgent, applied.communityBase),
-		conference: newConferenceSource(applied.httpClient, applied.userAgent, applied.conferenceBase),
-		logger:     logger,
-		lastGood:   make(map[Source]int, 2),
+		calendars: []calendar{
+			newCommunitySource(applied.httpClient, applied.userAgent, applied.communityBase),
+			newConferenceSource(applied.httpClient, applied.userAgent, applied.conferenceBase),
+			newKCDSource(applied.httpClient, applied.userAgent, applied.kcdBase),
+		},
+		logger:   logger,
+		lastGood: make(map[Source]int, 3),
 	}
 }
 
@@ -130,19 +139,26 @@ func New(logger *slog.Logger, opts ...Option) *Collector {
 // failure being mistaken for good news, which is what the guards in read are
 // for.
 func (c *Collector) Collect(ctx context.Context, now time.Time) (Set, []Health) {
-	communityEvents, communityHealth := c.read(ctx, c.community, now)
-	conferenceEvents, conferenceHealth := c.read(ctx, c.conference, now)
+	var (
+		raw    []Event
+		health = make([]Health, 0, len(c.calendars))
+	)
 
-	raw := make([]Event, 0, len(communityEvents)+len(conferenceEvents))
-	raw = append(raw, communityEvents...)
-	raw = append(raw, conferenceEvents...)
+	// The calendars are read one after another rather than together. Three
+	// requests a day do not justify a goroutine, and every goroutine in this
+	// repository is a thing somebody has to reason about.
+	for _, cal := range c.calendars {
+		read, report := c.read(ctx, cal, now)
+		raw = append(raw, read...)
+		health = append(health, report)
+	}
 
 	set, unknownZones := normalize(raw, now)
 	for _, zone := range unknownZones {
 		c.logger.Warn("unknown event time zone, bucketing by UTC instead", "zone", zone)
 	}
 
-	return set, []Health{communityHealth, conferenceHealth}
+	return set, health
 }
 
 // read fetches one calendar and applies the two guards that separate a quiet

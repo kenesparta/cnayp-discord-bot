@@ -32,6 +32,13 @@ const (
 	// SourceConference is the Linux Foundation conference calendar restricted to
 	// CNCF events: KubeCon and its co-located days, as calendar dates.
 	SourceConference Source = "conference"
+
+	// SourceKCD is the CNCF website's community-hosted listing, which in
+	// practice is the Kubernetes Community Days. It exists as its own source
+	// because the other two miss them: the Linux Foundation calendar carries
+	// none at all, and the community group calendar carries one only when its
+	// organizers happen to also run a community group.
+	SourceKCD Source = "kcd"
 )
 
 // A Kind says how an event is attended.
@@ -101,9 +108,15 @@ type Event struct {
 
 // Identity returns the key that identifies this event across runs. It is the
 // only key a caller may de-duplicate on: titles repeat, slugs are scoped to a
-// group, and the two calendars' identifiers live in unrelated namespaces.
+// group, and the calendars' identifiers live in unrelated namespaces.
 func (e Event) Identity() string {
 	return string(e.Source) + "/" + e.ID
+}
+
+// Conference reports whether this is a conference somebody travels to rather
+// than a local meetup — the events worth knowing about months ahead.
+func (e Event) Conference() bool {
+	return e.Source == SourceConference || e.Source == SourceKCD
 }
 
 // A Set is a group of normalized events, ordered by start instant.

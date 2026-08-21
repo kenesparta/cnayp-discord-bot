@@ -30,11 +30,11 @@ const (
 	conferenceTBA = "TBA"
 )
 
-// conferenceDateLayouts are the layouts seen in this calendar, newest first.
-// Every current record uses the first; the others exist in the historical rows
-// and are accepted so that a re-normalization upstream does not silence the
-// feed.
-var conferenceDateLayouts = []string{"2006/01/02", "2006-01-02", "01/02/2006"}
+// floatingDateLayouts are the layouts seen in the two Linux Foundation
+// calendars, newest first. Every current record uses the first; the others
+// exist in the historical rows and are accepted so that a re-normalization
+// upstream does not silence the feed.
+var floatingDateLayouts = []string{"2006/01/02", "2006-01-02", "01/02/2006"}
 
 // A conferenceSource reads the Linux Foundation conference calendar.
 //
@@ -127,14 +127,14 @@ func (r conferenceEvent) event() (Event, bool) {
 		return event, true
 	}
 
-	start, ok := parseConferenceDate(r.DateStart)
+	start, ok := parseFloatingDate(r.DateStart)
 	if !ok {
 		return Event{}, false
 	}
 	event.Start = start
 	event.LocalDay = start
 
-	if end, ok := parseConferenceDate(r.DateEnd); ok {
+	if end, ok := parseFloatingDate(r.DateEnd); ok {
 		event.End = end
 	}
 	return event, true
@@ -145,14 +145,15 @@ func isTBA(raw string) bool {
 	return strings.EqualFold(strings.TrimSpace(raw), conferenceTBA)
 }
 
-// parseConferenceDate reads a floating calendar date. The result is midnight
-// UTC of that day and carries no clock time: the calendar publishes none.
-func parseConferenceDate(raw string) (time.Time, bool) {
+// parseFloatingDate reads a floating calendar date, in any of the layouts the
+// two Linux Foundation calendars have used. The result is midnight UTC of that
+// day and carries no clock time: neither calendar publishes one.
+func parseFloatingDate(raw string) (time.Time, bool) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
 		return time.Time{}, false
 	}
-	for _, layout := range conferenceDateLayouts {
+	for _, layout := range floatingDateLayouts {
 		if parsed, err := time.Parse(layout, trimmed); err == nil {
 			return parsed.UTC(), true
 		}

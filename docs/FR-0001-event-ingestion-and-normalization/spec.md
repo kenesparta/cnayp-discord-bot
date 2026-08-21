@@ -4,7 +4,7 @@
 
 ## 1. Technical summary
 
-**What.** A new `internal/events` package that fetches two public event listings over HTTP, decodes them into one
+**What.** A new `internal/events` package that fetches three public event listings over HTTP, decodes them into one
 common event shape, filters and collapses the result, and reports the health of each source for the run. It exposes a
 single entry point — a `Collector` whose `Collect` returns the normalized event set plus a per-source health report —
 and it knows nothing about Discord.
@@ -26,13 +26,13 @@ requirement of ingestion rather than an operational nicety, and it belongs where
 
 **Scope**
 
-- **Included:** the community-group source client; the flagship conference source client; shared request discipline
-  (identifying User-Agent, timeout, size ceiling, content-type assertion); merge, filter, series collapsing, sorting
-  and text sanitization; the per-source health guards; the typed source errors.
+- **Included:** the community-group source client; the flagship conference source client; the Kubernetes Community
+  Days source client; shared request discipline (identifying User-Agent, timeout, size ceiling, content-type
+  assertion); merge, filter, series collapsing, cross-calendar de-duplication, sorting and text sanitization; the
+  per-source health guards; the typed source errors.
 - **Deferred to FR-0002:** the scheduler, delta detection, message composition and publishing, the run outcome log
   line, Discord markdown escaping, and the announcement channel configuration.
-- **Deferred outside this PRD:** the Kubernetes Community Days listing on `cncf.io` (PRD §9), and any persistent cache
-  of fetched results.
+- **Deferred outside this PRD:** any persistent cache of fetched results.
 
 **Requirements / business rules** (from the PRD's FR-0001 Capabilities block)
 
@@ -42,6 +42,8 @@ requirement of ingestion rather than an operational nicety, and it belongs where
 | Fetches per source per run | exactly 1 |
 | Page size (community source) | 100, the upstream hard cap; 101 or more returns HTTP 422 |
 | Page ceiling (community source) | 10 pages, then stop |
+| Host taxonomy (community days source) | term `351`, "Community-hosted"; the only filter that endpoint honours |
+| Page ceiling (community days source) | 3 pages of 100, or the first short page |
 | Response size ceiling | 8 MB, both sources |
 | Title truncation | 120 characters, at a word boundary, with a visible ellipsis |
 | Zero-record response | a source failure, never an empty result |
@@ -128,6 +130,9 @@ graph TD
 | Community-source paging | Driven by the response's `total`, capped at 10 pages, deduplicating by identifier | Follow a next-page link | The response carries no next link, and `total` is server-controlled, so the ceiling is what makes the loop terminate | Codebase pattern + research r7 §5 |
 | Identity | The pair (source, upstream id), never the id alone | A single id namespace | The two sources' identifiers are unrelated integers and UUIDs; comparing them would collide silently | PRD FR-0001 Capabilities |
 | Text sanitization split | Control characters, zero-width characters, whitespace collapsing and truncation here; markdown escaping in FR-0002 | All of it here | AC-0005.02 is satisfied jointly across two FRs, which the testing strategy records explicitly | Auto-Accept |
+| Selecting the community days | The `lf-event-host=351` taxonomy filter, server-side | Fetching all 310 records and filtering on the title | One request instead of four, and a filter the endpoint actually applies — its date parameters are accepted and ignored. The cost is a magic number, which a contract test pins to the term's slug | Probe of the live endpoint |
+| Cross-calendar matching | Canonical title plus start day, with the spelled-out "Kubernetes Community Day" reduced to "KCD" | Matching on `lf_event_external_url` | The external URL points at a host that redirects, so matching it would mean an HTTP request per event; the title-and-day key needs none and catches the one case that actually occurs. Verified against live data: Gujarat 2026 is listed once | Probe of the live endpoints |
+| Which record survives a match | The one with an exact start time, a venue and an organizer | Preferring a fixed calendar | An event listed on the website first and joining the community calendar later changes which record represents it, and is announced once more. That is a known, bounded cost, taken over permanently poorer announcements | Auto-Accept |
 | Malformed record handling | Skip the record, count it, keep the response | Fail the source | One upstream record losing a field must not silence a whole day | PRD FR-0001 Error handling (`RECORD_SKIPPED`) |
 
 ## 4. Component summary
@@ -138,7 +143,8 @@ graph TD
 | `internal/events/source.go` | New | Shared request discipline | One `fetch` helper: sets the User-Agent, applies the deadline, asserts a 2xx, asserts the JSON content type, limits the body to 8 MB, stream-decodes; converts failures into typed `*SourceError` values |
 | `internal/events/ocgroups.go` | New | Community-group source | Builds the windowed query, pages on `total` to a 10-page ceiling, deduplicates by `event_id`, maps records to `Event`, builds the canonical page address, counts skipped records |
 | `internal/events/lfevents.go` | New | Flagship conference source | Single request with the CNCF category filter, multi-layout date parsing, the `TBA` case, `location.virtual`, maps records to `Event` |
-| `internal/events/normalize.go` | New | Merge and shape | Filters canceled/test/unpublished/past, collapses series, sanitizes and truncates titles, computes the local day, sorts by start |
+| `internal/events/cncf.go` | New | Community days source | Taxonomy-filtered listing, HTML-entity decoding of titles, floating dates, paging until a short page |
+| `internal/events/normalize.go` | New | Merge and shape | Filters canceled/test/unpublished/past, collapses series, de-duplicates across calendars, sanitizes and truncates titles, computes the local day, sorts by start |
 | `internal/events/collector.go` | New | Orchestration and guards | Owns the two sources and the last-good counts; applies the empty and floor guards; returns `Set` plus `[]Health`; never returns a partial-failure error when one source succeeded |
 | `internal/events/contract_test.go` | New | Drift detection | Behind the `contract` build tag: hits both live endpoints and asserts the field and filter contract still holds |
 | `.github/workflows/contract.yml` | New | Scheduled drift check | Runs the contract-tagged test daily and on demand; failure is a notification, not a release blocker |
@@ -265,7 +271,39 @@ Accept: application/json
 Sending no User-Agent header at all, or the runtime's default `Go-http-client/…`, returns **HTTP 403** from this
 host's cache layer. This is invisible in local `curl` testing and is covered by a dedicated test.
 
-**Error codes** (both contracts, from the PRD's FR-0001 Error handling block)
+### Contract C — Kubernetes Community Days listing
+
+- **Method:** GET
+- **URL:** `https://www.cncf.io/wp-json/wp/v2/lf_event`
+- **Authentication:** none
+- **Derives from:** FR-0001 Provides (community day records)
+
+**Request parameters**
+
+| Parameter | Type | Required | Value | Description |
+| --------- | ---- | -------- | ----- | ----------- |
+| `lf-event-host` | integer | Yes | `351` | The "Community-hosted" term. Narrows 310 records to 61 server-side. An unknown term id returns 200 with an empty array, not an error |
+| `per_page` | integer | Yes | `100` | The maximum; more returns 400 |
+| `page` | integer | Yes | `1`, then `+1` | Stop at the first short page |
+| `_fields` | string | Yes | `id,link,title,meta` | Cuts the payload to what is used |
+
+There is **no date filter**. `meta_key`/`meta_value` are accepted and silently ignored, and `orderby=meta_value`
+returns 400, so both the window and the ordering are applied in Go.
+
+**Response fields consumed**
+
+| Field | Type | Use |
+| ----- | ---- | --- |
+| `id` | integer | Identity within this source only |
+| `link` | string | Canonical page on the CNCF website |
+| `title.rendered` | string | Title, **HTML-encoded**: `KCD UK &#8211; Edinburgh 2026` |
+| `meta.lf_event_date_start`, `.lf_event_date_end` | string | `YYYY/MM/DD`, no time, no zone |
+| `meta.lf_event_city` | string | Place; may be in a non-Latin script (`София`) |
+
+`meta` is a WordPress plugin's internal storage rather than a published contract, so every field under it is treated
+as optional and a record missing a date is skipped rather than guessed at.
+
+**Error codes** (all three contracts, from the PRD's FR-0001 Error handling block)
 
 | Code | Condition | Effect on the run |
 | ---- | --------- | ----------------- |
@@ -325,6 +363,7 @@ network except `contract_test.go`, which is excluded from `make test` by a build
 | `internal/events/source_test.go` | Unit | Request discipline | Every guard in `fetch` |
 | `internal/events/ocgroups_test.go` | Unit + Acceptance | Community source | Paging, mapping, skipping, URL building |
 | `internal/events/lfevents_test.go` | Unit + Acceptance | Conference source | Date layouts, `TBA`, virtual flag, User-Agent |
+| `internal/events/cncf_test.go` | Unit + Acceptance | Community days source | Taxonomy filter, entity decoding, mapping, skipping, paging |
 | `internal/events/normalize_test.go` | Acceptance | Filtering, collapsing, sanitizing | 100% of the US-0004 and US-0005 criteria owned here |
 | `internal/events/collector_test.go` | Acceptance | Guards and orchestration | 100% of the US-0006 criteria owned here |
 | `internal/events/contract_test.go` | Contract | Live endpoints | Run on a schedule, never in `make test` |
@@ -349,6 +388,16 @@ network except `contract_test.go`, which is excluded from `make test` by a build
 | `TestLFEventsKeepsTBADates` | `TBA` is preserved, not invented and not dropped | AC-0003.04 | `DateTBA` true, event present |
 | `TestLFEventsSkipsUnparsableDates` | A junk date drops that record only | AC-0006.04 | Other records survive; `Skipped` is 1 |
 | `TestLFEventsCarriesPlaceAndVirtualFlag` | Place and attendance kind reach the `Event` | AC-0003.03 | City and country present; `KindVirtual` when `location.virtual` |
+| `TestCNCFAsksOnlyForCommunityHostedEvents` | The taxonomy filter is what narrows the listing | FR-0001 Capabilities | Query carries the host term, page size and field list |
+| `TestCNCFUnescapesTitles` | Titles arrive as HTML | FR-0001 Capabilities | `&#8211;` becomes an en dash |
+| `TestCNCFMapsARecordCompletely` | Mapping | AC-0003.03 | Date-only start, city, canonical link, counted as a conference |
+| `TestCNCFSkipsRecordsItCannotUse` | Missing id, title, link or date | AC-0006.04 | The good record survives; `Skipped` is 1 |
+| `TestCNCFStopsAtAShortPage` | Paging | FR-0001 Capabilities | One request for a short page |
+| `TestDedupeMatchesACommunityDayAcrossCalendars` | The real overlap, both spellings | AC-0004.05 | One survivor, and it is the one with a start time |
+| `TestDedupeKeepsSameNamedEventsOnDifferentDaysApart` | Precision of the key | AC-0004.05 | Two survivors |
+| `TestDedupeLeavesOneCalendarAlone` | Same-source pairs are collapsing's business | AC-0004.05 | Both survive |
+| `TestDedupeDoesNotMatchOnAnUnsettledDate` | No date, no match | AC-0003.04 | Both survive |
+| `TestCanonicalTitleReconcilesHowTheCalendarsSpellIt` | The abbreviation rule | AC-0004.05 | Spelled-out and abbreviated forms agree; two cities do not |
 | `TestFilterRemovesCanceledTestAndUnpublished` | The three status filters | AC-0004.03 | None of the three survive |
 | `TestFilterRemovesPastEvents` | Past starts are dropped against the run's captured clock | AC-0004.04 | Only future events survive |
 | `TestCollapseUsesSeriesIDWhenPresent` | Series identifier wins | AC-0004.01 | One survivor from four occurrences |
@@ -375,5 +424,8 @@ the publisher, and are tested in FR-0002. AC-0005.02 is split: the source-agnost
 
 **Contract test** (`contract_test.go`, build tag `contract`, NFR-0012): asserts that each live endpoint still returns
 JSON, that the community source's `total` for the CNCF window is greater than 30, that a deliberately wrong community
-slug still returns 200 with `total: 0` — the assumption the empty guard rests on — and that `limit=101` still returns
-422. A failure means the upstream moved, not that the bot is broken.
+slug still returns 200 with `total: 0` — the assumption the empty guard rests on — that `limit=101` still returns 422,
+that the community days listing still answers with at least 30 records of which some are upcoming, and that taxonomy
+term `351` is still the one whose slug is `community-hosted`. That last one matters more than it looks: the whole
+third source rests on a magic number, and a renumbered term would silently turn the listing into something else.
+A failure means an upstream moved, not that the bot is broken.

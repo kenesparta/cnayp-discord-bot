@@ -267,3 +267,112 @@ func TestSetIsOrderedByStartWithUndatedEventsLast(t *testing.T) {
 		t.Errorf("order = %v, want %v", got, want)
 	}
 }
+
+// kcdEvent builds a Kubernetes Community Day as the CNCF website publishes it:
+// a bare date, a city, and no clock time.
+func kcdDay(id, title string, days int) Event {
+	start := day(runClock.AddDate(0, 0, days))
+	return Event{
+		Source:    SourceKCD,
+		ID:        id,
+		Title:     title,
+		Start:     start,
+		LocalDay:  start,
+		Kind:      KindInPerson,
+		Place:     "Ahmedabad",
+		URL:       "https://www.cncf.io/events/" + id + "/",
+		published: true,
+	}
+}
+
+// day is the local helper the renderer has; normalization needs one too.
+func day(t time.Time) time.Time {
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+}
+
+func TestDedupeMatchesACommunityDayAcrossCalendars(t *testing.T) {
+	// The real case, taken from the live calendars: the same Kubernetes
+	// Community Day, spelled out on one calendar and abbreviated on the other.
+	website := kcdDay("173544", "KCD Gujarat 2026", 30)
+
+	group := communityEventAt("uuid-1", 30)
+	group.Title = "Kubernetes Community Day Gujarat 2026"
+	group.Start = website.Start.Add(9 * time.Hour)
+	group.Group = "Cloud Native Gandhinagar"
+
+	set, _ := normalize([]Event{website, group}, runClock)
+
+	if len(set) != 1 {
+		titles := make([]string, len(set))
+		for i, event := range set {
+			titles[i] = event.Title
+		}
+		t.Fatalf("kept %v, want one listing of one event", titles)
+	}
+	// The community record wins: it has a time, a venue and an organizer.
+	if !set[0].Exact {
+		t.Errorf("kept the bare-date listing over the one with a start time: %+v", set[0])
+	}
+}
+
+func TestDedupeKeepsSameNamedEventsOnDifferentDaysApart(t *testing.T) {
+	first := kcdDay("1", "KCD Gujarat 2026", 30)
+	second := communityEventAt("uuid-2", 31)
+	second.Title = "Kubernetes Community Day Gujarat 2026"
+
+	set, _ := normalize([]Event{first, second}, runClock)
+
+	if len(set) != 2 {
+		t.Errorf("kept %d events, want 2: a day apart is a different event", len(set))
+	}
+}
+
+func TestDedupeLeavesOneCalendarAlone(t *testing.T) {
+	// Two entries from the same calendar are that calendar's business, and
+	// series collapsing has already had its say.
+	first := kcdDay("1", "KCD Lima 2026", 30)
+	second := kcdDay("2", "KCD Arequipa 2026", 30)
+
+	set, _ := normalize([]Event{first, second}, runClock)
+
+	if len(set) != 2 {
+		t.Errorf("kept %d events, want both", len(set))
+	}
+}
+
+func TestDedupeDoesNotMatchOnAnUnsettledDate(t *testing.T) {
+	// Two events with no date cannot be matched on one, so neither displaces
+	// the other.
+	first := Event{Source: SourceConference, ID: "1", Title: "Open Source Forum", DateTBA: true, URL: "https://x/", published: true}
+	second := Event{Source: SourceKCD, ID: "2", Title: "Open Source Forum", DateTBA: true, URL: "https://y/", published: true}
+
+	set, _ := normalize([]Event{first, second}, runClock)
+
+	if len(set) != 2 {
+		t.Errorf("kept %d events, want both: neither has a date to match on", len(set))
+	}
+}
+
+func TestCanonicalTitleReconcilesHowTheCalendarsSpellIt(t *testing.T) {
+	tests := []struct {
+		spelled string
+		short   string
+	}{
+		{"Kubernetes Community Day Gujarat 2026", "KCD Gujarat 2026"},
+		{"Kubernetes Community Days São Paulo", "KCD São Paulo"},
+		{"KCD UK – Edinburgh 2026", "KCD UK Edinburgh 2026"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.short, func(t *testing.T) {
+			if canonicalTitle(tt.spelled) != canonicalTitle(tt.short) {
+				t.Errorf("canonicalTitle(%q) = %q, want it to match canonicalTitle(%q) = %q",
+					tt.spelled, canonicalTitle(tt.spelled), tt.short, canonicalTitle(tt.short))
+			}
+		})
+	}
+
+	if canonicalTitle("KCD Lima") == canonicalTitle("KCD Arequipa") {
+		t.Error("canonicalTitle collapses two different cities into one event")
+	}
+}
