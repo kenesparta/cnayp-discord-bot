@@ -172,9 +172,9 @@ func block(event events.Event) string {
 	line.WriteString("**\n")
 	line.WriteString(when(event))
 
-	if place := place(event); place != "" {
-		line.WriteString(" · 📍 ")
-		line.WriteString(escape(place))
+	if marker, where := place(event); where != "" {
+		line.WriteString(" · " + marker + " ")
+		line.WriteString(escape(where))
 	}
 	if event.Group != "" {
 		line.WriteString(" · 👥 ")
@@ -218,16 +218,16 @@ func dateRange(start, end time.Time) string {
 	return start.Format("2 Jan") + " – " + end.Format("2 Jan 2006")
 }
 
-// place renders where an event happens, falling back to the online marker when
-// there is nowhere to be.
-func place(event events.Event) string {
+// place renders where an event happens, together with the marker that precedes
+// it: a pin for somewhere to go, a screen for somewhere to log in.
+func place(event events.Event) (marker, where string) {
 	if event.Place != "" {
-		return event.Place
+		return "📍", event.Place
 	}
 	if event.Kind == events.KindVirtual {
-		return markerOnline
+		return "💻", markerOnline
 	}
-	return ""
+	return "", ""
 }
 
 // markdownSpecials are the characters Discord reads as formatting. Escaping is
