@@ -1,9 +1,10 @@
 # cnayp-discord-bot
 
-A Discord bot in Go with **no external dependencies** — the WebSocket transport (RFC 6455) and the
-Discord API client are implemented here on top of the standard library. It currently serves two
-slash commands — `/ping`, which reports gateway latency to the channel, and `/test`, an ephemeral
-deploy smoke check — and is meant as a base to grow from.
+A Discord bot in Go with **no external dependencies** — the WebSocket transport (RFC 6455), the
+Discord API client and the event calendar clients are implemented here on top of the standard
+library. It serves two slash commands — `/ping`, which reports gateway latency to the channel, and
+`/test`, an ephemeral deploy smoke check — and, once a day, posts upcoming cloud native events from
+the public CNCF and Linux Foundation calendars into one channel.
 
 It runs for the **Cloud Native Ayacucho Community (CNAYP)**, a volunteer community that meets to
 learn about cloud native technologies, and is used for educational and informational purposes only.
@@ -116,7 +117,8 @@ Discord requires a Terms of Service and Privacy Policy URL for the application. 
 - Terms of Service — https://cnayp-bot.kenesparta.dev/terms.html
 - Privacy Policy — https://cnayp-bot.kenesparta.dev/privacy.html
 
-The bot itself serves no HTTP; it only dials out to Discord. The site is a separate static deploy,
+The bot itself serves no HTTP and has no listener; it dials out to Discord and, once a day, to the
+two public event calendars it announces from. The site is a separate static deploy,
 run by `.github/workflows/site.yml` on `v*` tags — a legal document goes live because a release was
 cut, not because `main` moved. It authenticates to AWS by assuming an IAM role through GitHub's OIDC
 provider, so no AWS access keys exist on either side.
@@ -147,17 +149,23 @@ python3 -m http.server -d site 8000    # http://localhost:8000/terms.html
 ```
 
 Both documents describe the bot's actual data handling, which follows from the `GUILDS`-only gateway
-intent and the absence of any persistent storage. **Changing either — widening intents, adding a
-database or a cache, or logging new fields — means updating the Privacy Policy in the same change.**
+intent, the absence of any persistent storage, and the fact that the only hosts it talks to are
+Discord and the two public event calendars. **Changing any of those — widening intents, adding a
+database or a cache, logging new fields, calling a new third-party host, or posting somewhere new —
+means updating the Privacy Policy in the same change.**
 
 ## Application metadata
 
 What the Developer Portal shows users in the "Add App" dialog. It lives in Discord, not in this repo,
 so it is recorded here to keep it reviewable:
 
-> A bot for the Cloud Native Ayacucho Community (CNAYP). Shares learning material, documentation and
-> meetup announcements. Educational and informational use only; it cannot read your messages and
-> stores nothing.
+> A bot for the Cloud Native Ayacucho Community (CNAYP). Shares learning material and documentation,
+> and posts upcoming cloud native events from public CNCF and Linux Foundation calendars into one
+> channel on a daily schedule. Educational and informational use only; it cannot read your messages
+> and stores nothing.
+
+The portal is edited by hand and CI cannot see it: after changing the text above, paste it into the
+Developer Portal before cutting the release.
 
 Tags: `cloud native`, `community`, `kubernetes`, `peru`, `education` (max 5, 20 characters each).
 

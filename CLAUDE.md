@@ -37,13 +37,17 @@ above it) and flags unused function parameters, including in tests, where `_` is
 
 ## Architecture
 
-Four layers, each depending only on the ones below it. `main` wires and hands off; everything lives
-under `internal/` so nothing outside the module can import it.
+Layered, each package depending only on the ones below it. `main` wires and hands off; everything
+lives under `internal/` so nothing outside the module can import it. `internal/announce` and
+`internal/discord` are siblings: the announcer uses the Discord client, and `internal/events` uses
+neither — it must never import a Discord type.
 
 ```
 cmd/bot            main(): config → signals → run() → exit code
   └── internal/bot        command registry, interaction routing, publishing
         └── internal/command   one file per slash command; All() is the registry
+        └── internal/announce  the daily event announcer: schedule, delta, rendering
+              └── internal/events    the two public event calendars (no Discord in it)
         └── internal/discord   REST client + gateway session (the Discord protocol)
               └── internal/websocket   RFC 6455 client (the transport)
 ```
@@ -105,8 +109,9 @@ Timing-sensitive gateway tests use short heartbeat intervals; they have been run
 
 `site/` holds the Terms of Service and Privacy Policy the Discord developer portal links to, served
 from S3 behind CloudFront at `cnayp-bot.kenesparta.dev`. **The bot process serves no HTTP at all** —
-it only dials out to Discord, has no listener, no `EXPOSE`, and no published ports. The site is an
-entirely separate static deploy; do not add an HTTP server to the bot to host these.
+it has no listener, no `EXPOSE`, and no published ports. It dials *out* to Discord and, once a day,
+to the two public event calendars in `internal/events`. The site is an entirely separate static
+deploy; do not add an HTTP server to the bot to host these.
 
 The HTML in `site/` is the single source of truth — there is deliberately no Markdown copy, because
 two versions of a legal document drift.
@@ -123,9 +128,11 @@ description, which lives in the Developer Portal rather than in git. It is trans
 to be updated by hand, and CI cannot catch a drift.
 
 The Privacy Policy makes specific factual claims about the bot's behaviour: `GUILDS` intent only, no
-persistent storage, and logs that record command *names* but not their argument values, user IDs, or
-usernames. Any change to intents, storage, or the fields passed to `logger.*` falsifies one of those
-claims — update `site/privacy.html` in the same change.
+persistent storage, no permission to read message history, an outbound call to exactly two public
+event calendars, and logs that record command *names* and run counts but not argument values, user
+IDs, usernames, or anything an event's organiser wrote. Any change to intents, storage, outbound
+hosts, or the fields passed to `logger.*` falsifies one of those claims — update `site/privacy.html`
+in the same change.
 
 ### The AWS side lives in another repo
 
