@@ -453,3 +453,93 @@ func TestInteractionDataOption(t *testing.T) {
 		t.Error("Option(\"missing\") = found, want not found")
 	}
 }
+
+func TestCreateMessageSendsContentFlagsAndAllowedMentions(t *testing.T) {
+	client, requests := recordingServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"id":"1"}`)
+	})
+
+	err := client.CreateMessage(context.Background(), "1539531942754517072", Message{
+		Content: "**Upcoming events**",
+		Flags:   FlagSuppressEmbeds | FlagSuppressNotifications,
+	})
+	if err != nil {
+		t.Fatalf("CreateMessage() = %v, want nil", err)
+	}
+
+	req := (*requests)[0]
+	if want := "/channels/1539531942754517072/messages"; req.URL.Path != want {
+		t.Errorf("path = %q, want %q", req.URL.Path, want)
+	}
+	if req.Method != http.MethodPost {
+		t.Errorf("method = %q, want POST", req.Method)
+	}
+
+	var sent Message
+	if err := json.NewDecoder(req.Body).Decode(&sent); err != nil {
+		t.Fatalf("decode request body: %v", err)
+	}
+	if sent.Content != "**Upcoming events**" {
+		t.Errorf("content = %q, want the rendered message", sent.Content)
+	}
+	if want := FlagSuppressEmbeds | FlagSuppressNotifications; sent.Flags != want {
+		t.Errorf("flags = %d, want %d", sent.Flags, want)
+	}
+	// The whole point: Discord parses every mention in the text when this field
+	// is absent, and the text is assembled from titles strangers wrote.
+	if sent.AllowedMentions == nil {
+		t.Fatal("allowed_mentions was not sent; Discord would parse every mention in the body")
+	}
+	if len(sent.AllowedMentions.Parse) != 0 {
+		t.Errorf("allowed_mentions.parse = %v, want an empty list", sent.AllowedMentions.Parse)
+	}
+}
+
+func TestCreateMessageEncodesAnEmptyParseListNotNull(t *testing.T) {
+	// A nil slice encodes as null, which Discord reads as "no preference" and
+	// falls back to parsing everything. The distinction is invisible in Go and
+	// decisive on the wire, so it is asserted against the raw body.
+	client, requests := recordingServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"id":"1"}`)
+	})
+
+	if err := client.CreateMessage(context.Background(), "9", Message{Content: "@everyone"}); err != nil {
+		t.Fatalf("CreateMessage() = %v, want nil", err)
+	}
+
+	body, _ := io.ReadAll((*requests)[0].Body)
+	if !strings.Contains(string(body), `"allowed_mentions":{"parse":[]}`) {
+		t.Errorf("body = %s, want an empty parse array", body)
+	}
+}
+
+func TestCreateMessageRejectsAnEmptyChannel(t *testing.T) {
+	client, requests := recordingServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"id":"1"}`)
+	})
+
+	if err := client.CreateMessage(context.Background(), "", Message{Content: "x"}); err == nil {
+		t.Fatal("CreateMessage() = nil error, want an empty channel id to be rejected")
+	}
+	if len(*requests) != 0 {
+		t.Error("a request was made for an empty channel id")
+	}
+}
+
+func TestCreateMessageSurfacesAPIErrors(t *testing.T) {
+	client, _ := recordingServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = io.WriteString(w, `{"code":50013,"message":"Missing Permissions"}`)
+	})
+
+	err := client.CreateMessage(context.Background(), "9", Message{Content: "x"})
+
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("CreateMessage() = %v, want *APIError", err)
+	}
+	if !apiErr.Unauthorized() {
+		t.Errorf("Unauthorized() = false for status %d, want true", apiErr.StatusCode)
+	}
+}

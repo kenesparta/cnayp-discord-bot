@@ -137,6 +137,25 @@ func (c *Client) BulkOverwriteCommands(ctx context.Context, applicationID, guild
 	return published, nil
 }
 
+// CreateMessage posts a message to a channel. It needs the View Channel and
+// Send Messages permissions there, and nothing else: the bot never reads the
+// channel, so it is never granted Read Message History.
+//
+// A caller that leaves AllowedMentions nil gets [NoMentions]. Discord's own
+// default is the opposite — it resolves every mention in the text — and this
+// endpoint exists to publish text the bot did not write.
+func (c *Client) CreateMessage(ctx context.Context, channelID string, message Message) error {
+	if channelID == "" {
+		return errors.New("channel id is empty")
+	}
+	if message.AllowedMentions == nil {
+		message.AllowedMentions = NoMentions()
+	}
+
+	path := "/channels/" + url.PathEscape(channelID) + "/messages"
+	return c.do(ctx, http.MethodPost, path, message, nil)
+}
+
 // RespondToInteraction answers an interaction. Discord accepts exactly one
 // response per interaction, within three seconds of receiving it.
 func (c *Client) RespondToInteraction(ctx context.Context, interaction *Interaction, response InteractionResponse) error {

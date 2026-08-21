@@ -22,11 +22,28 @@ func TestLoad(t *testing.T) {
 		{
 			name: "all values",
 			env: map[string]string{
-				config.EnvDiscordToken: "t0ken",
-				config.EnvGuildID:      "123",
-				config.EnvLogLevel:     "debug",
+				config.EnvDiscordToken:    "t0ken",
+				config.EnvGuildID:         "123",
+				config.EnvEventsChannelID: "1539531942754517072",
+				config.EnvLogLevel:        "debug",
 			},
-			want: config.Config{DiscordToken: "t0ken", GuildID: "123", LogLevel: slog.LevelDebug},
+			want: config.Config{
+				DiscordToken:    "t0ken",
+				GuildID:         "123",
+				EventsChannelID: "1539531942754517072",
+				LogLevel:        slog.LevelDebug,
+			},
+		},
+		{
+			// A malformed channel id would otherwise produce a bot that starts
+			// cleanly and fails every announcement against a channel that cannot
+			// exist.
+			name: "unusable events channel",
+			env: map[string]string{
+				config.EnvDiscordToken:    "t0ken",
+				config.EnvEventsChannelID: "#eventos",
+			},
+			wantErr: true,
 		},
 		{
 			name:    "missing token",
@@ -45,7 +62,12 @@ func TestLoad(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			for _, key := range []string{config.EnvDiscordToken, config.EnvGuildID, config.EnvLogLevel} {
+			for _, key := range []string{
+				config.EnvDiscordToken,
+				config.EnvGuildID,
+				config.EnvEventsChannelID,
+				config.EnvLogLevel,
+			} {
 				t.Setenv(key, tt.env[key])
 			}
 

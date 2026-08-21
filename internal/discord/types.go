@@ -247,8 +247,23 @@ const (
 // MessageFlags modify how a message is delivered.
 type MessageFlags int
 
-// FlagEphemeral shows the message only to the user who triggered the interaction.
-const FlagEphemeral MessageFlags = 1 << 6
+// The flags the bot sets on the messages it sends.
+const (
+	// FlagSuppressEmbeds stops Discord from generating a preview card for the
+	// links in a message. A list of ten events would otherwise arrive as a list
+	// of ten cards.
+	FlagSuppressEmbeds MessageFlags = 1 << 2
+
+	// FlagEphemeral shows the message only to the user who triggered the
+	// interaction.
+	FlagEphemeral MessageFlags = 1 << 6
+
+	// FlagSuppressNotifications delivers a message without a push or desktop
+	// notification. It still appears in the channel, and still marks it unread:
+	// it is the difference between a bot worth keeping unmuted and one that is
+	// not.
+	FlagSuppressNotifications MessageFlags = 1 << 12
+)
 
 // An InteractionResponse is the bot's reply to an interaction.
 type InteractionResponse struct {
@@ -260,6 +275,38 @@ type InteractionResponse struct {
 type InteractionResponseData struct {
 	Content string       `json:"content,omitempty"`
 	Flags   MessageFlags `json:"flags,omitempty"`
+}
+
+// AllowedMentions says which mentions Discord may resolve in a message body.
+//
+// It matters because the default is permissive: a message sent without it has
+// every @everyone, @here, role and user mention in its text parsed. For a
+// message assembled from titles hundreds of strangers wrote, that default is
+// the whole risk, and it is why [NoMentions] exists rather than a bare struct
+// literal at each call site.
+type AllowedMentions struct {
+	// Parse is the set of mention kinds to resolve. An empty, non-nil slice
+	// resolves none; a nil slice would encode as null and restore the default.
+	Parse []string `json:"parse"`
+}
+
+// NoMentions resolves no mention of any kind.
+func NoMentions() *AllowedMentions {
+	return &AllowedMentions{Parse: []string{}}
+}
+
+// A Message is a message the bot creates in a channel.
+type Message struct {
+	// Content is the message body, up to 2000 characters.
+	Content string `json:"content,omitempty"`
+
+	// Flags modify delivery; see [FlagSuppressEmbeds] and
+	// [FlagSuppressNotifications].
+	Flags MessageFlags `json:"flags,omitempty"`
+
+	// AllowedMentions is never omitted in practice: [Client.CreateMessage] fills
+	// it with [NoMentions] when a caller leaves it nil.
+	AllowedMentions *AllowedMentions `json:"allowed_mentions,omitempty"`
 }
 
 // MessageReply builds the common case: a plain visible message.

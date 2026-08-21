@@ -11,9 +11,10 @@ import (
 
 // Environment variables read by [Load].
 const (
-	EnvDiscordToken = "DISCORD_TOKEN"
-	EnvGuildID      = "DISCORD_GUILD_ID"
-	EnvLogLevel     = "LOG_LEVEL"
+	EnvDiscordToken    = "DISCORD_TOKEN"
+	EnvGuildID         = "DISCORD_GUILD_ID"
+	EnvEventsChannelID = "DISCORD_EVENTS_CHANNEL_ID"
+	EnvLogLevel        = "LOG_LEVEL"
 )
 
 // Config holds every value the bot needs to start.
@@ -26,6 +27,11 @@ type Config struct {
 	// Discord may take up to an hour to propagate.
 	GuildID string
 
+	// EventsChannelID is the channel the bot announces upcoming cloud native
+	// events in. Empty leaves the announcer switched off and the bot serving
+	// commands only.
+	EventsChannelID string
+
 	// LogLevel is the minimum level the default logger emits.
 	LogLevel slog.Level
 }
@@ -34,13 +40,21 @@ type Config struct {
 // required variable is missing or a value cannot be parsed.
 func Load() (Config, error) {
 	cfg := Config{
-		DiscordToken: os.Getenv(EnvDiscordToken),
-		GuildID:      os.Getenv(EnvGuildID),
-		LogLevel:     slog.LevelInfo,
+		DiscordToken:    os.Getenv(EnvDiscordToken),
+		GuildID:         os.Getenv(EnvGuildID),
+		EventsChannelID: os.Getenv(EnvEventsChannelID),
+		LogLevel:        slog.LevelInfo,
 	}
 
 	if cfg.DiscordToken == "" {
 		return Config{}, fmt.Errorf("%s is empty", EnvDiscordToken)
+	}
+
+	// A channel id is a snowflake, and a malformed one is indistinguishable from
+	// a working bot that never posts: every announcement would fail against a
+	// channel that cannot exist. Catch it at startup instead.
+	if cfg.EventsChannelID != "" && !isSnowflake(cfg.EventsChannelID) {
+		return Config{}, fmt.Errorf("%s %q is not a channel id", EnvEventsChannelID, cfg.EventsChannelID)
 	}
 
 	if raw := os.Getenv(EnvLogLevel); raw != "" {
@@ -50,4 +64,14 @@ func Load() (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// isSnowflake reports whether id has the shape of a Discord id: a run of digits.
+func isSnowflake(id string) bool {
+	for _, r := range id {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
