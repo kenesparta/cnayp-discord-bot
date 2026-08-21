@@ -9,6 +9,9 @@ services:
     environment:
       DISCORD_TOKEN: ${DISCORD_TOKEN:?set via sops exec-env}
       DISCORD_GUILD_ID: ${DISCORD_GUILD_ID:-}
+      # The channel the bot announces upcoming cloud native events in. Unset
+      # leaves the announcer off and the bot serving commands only.
+      DISCORD_EVENTS_CHANNEL_ID: ${DISCORD_EVENTS_CHANNEL_ID:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     read_only: true
     security_opt:

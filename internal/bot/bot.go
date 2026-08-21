@@ -6,10 +6,13 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 
+	"github.com/kenesparta/cnayp-discord-bot/internal/announce"
 	"github.com/kenesparta/cnayp-discord-bot/internal/command"
 	"github.com/kenesparta/cnayp-discord-bot/internal/config"
 	"github.com/kenesparta/cnayp-discord-bot/internal/discord"
+	"github.com/kenesparta/cnayp-discord-bot/internal/events"
 )
 
 // Bot serves the commands in [command.All] over a Discord gateway session.
@@ -20,6 +23,10 @@ type Bot struct {
 	guildID  string
 	commands []command.Command
 	handlers map[string]command.Handler
+
+	// announcer is nil when no announcement channel is configured, which leaves
+	// the bot serving commands and nothing else.
+	announcer *announce.Announcer
 }
 
 // New builds a bot from cfg. It does not touch the network; [Bot.Run] does.
@@ -50,14 +57,45 @@ func New(cfg config.Config, logger *slog.Logger) (*Bot, error) {
 		commands: commands,
 		handlers: handlers,
 	}
+
+	if cfg.EventsChannelID != "" {
+		b.announcer = announce.New(events.New(logger), client, cfg.EventsChannelID, logger)
+	}
+
 	session.OnReady(b.onReady)
 	session.OnInteraction(b.onInteraction)
 	return b, nil
 }
 
-// Run connects to the gateway and serves commands until ctx is cancelled.
+// Run connects to the gateway and serves commands until ctx is cancelled. With
+// an announcement channel configured it also runs the announcer alongside the
+// session.
+//
+// The announcer is owned here, and deliberately not started from [Bot.onReady]
+// like the command publish is. That handler fires on every fresh READY, and the
+// session reconnects with backoff whenever Discord drops it, so an afternoon of
+// gateway trouble would become an afternoon of duplicate announcements. Owning
+// it here also gives it the ownership every goroutine in this repository has:
+// cancelled by the caller's context, and waited for before Run returns.
 func (b *Bot) Run(ctx context.Context) error {
-	return b.session.Run(ctx)
+	if b.announcer == nil {
+		return b.session.Run(ctx)
+	}
+
+	// Deferred calls run last to first, so this unwinds as: cancel the context,
+	// then wait for the announcer to notice and return.
+	runCtx, cancel := context.WithCancel(ctx)
+	var running sync.WaitGroup
+	defer running.Wait()
+	defer cancel()
+
+	running.Add(1)
+	go func() {
+		defer running.Done()
+		b.announcer.Run(runCtx)
+	}()
+
+	return b.session.Run(runCtx)
 }
 
 // onReady publishes the command set every time a fresh session starts, so

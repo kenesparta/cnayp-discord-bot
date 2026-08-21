@@ -43,6 +43,7 @@ an hour to propagate. Unset it only if the bot is ever meant to serve servers be
 | ------------------ | -------- | ------- | -------------------------------------------------- |
 | `DISCORD_TOKEN`    | yes      | —       | Bot token from the developer portal.                |
 | `DISCORD_GUILD_ID` | no       | global  | Guild to register commands in. Set to the CNAYP guild — see above. |
+| `DISCORD_EVENTS_CHANNEL_ID` | no | off | Channel for the daily event announcements. Unset leaves the announcer off. |
 | `LOG_LEVEL`        | no       | `info`  | `debug`, `info`, `warn` or `error`.                 |
 
 ## Layout
