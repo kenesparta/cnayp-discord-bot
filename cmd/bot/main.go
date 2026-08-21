@@ -10,6 +10,13 @@ import (
 	"os/signal"
 	"syscall"
 
+	// The event calendars name their time zones by IANA id, including legacy
+	// aliases such as US/Eastern and Asia/Calcutta, and the binary ships on a
+	// scratch-like base image that carries no zone database of its own. Embedding
+	// the standard library's copy makes the lookup work the same everywhere
+	// rather than only where the base image happens to help.
+	_ "time/tzdata"
+
 	"github.com/kenesparta/cnayp-discord-bot/internal/bot"
 	"github.com/kenesparta/cnayp-discord-bot/internal/config"
 )

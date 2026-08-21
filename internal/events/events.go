@@ -13,6 +13,10 @@ package events
 
 import "time"
 
+// horizonMonths is how far ahead the calendars are read and announced. It is
+// the window the requirement fixes, and both calendars are trimmed to it.
+const horizonMonths = 6
+
 // A Source names which calendar an event came from. It is half of an event's
 // identity: the two calendars number their events independently — one with
 // UUIDs, the other with database row ids — so an identifier only means
@@ -85,6 +89,14 @@ type Event struct {
 
 	// URL is the canonical page for the event on its calendar.
 	URL string
+
+	// canceled, test and published are the calendar's own status flags. They are
+	// unexported deliberately: they exist only until normalization drops the
+	// records that fail them, and nothing outside this package should ever be
+	// handed an event that was canceled or was never published.
+	canceled  bool
+	test      bool
+	published bool
 }
 
 // Identity returns the key that identifies this event across runs. It is the
