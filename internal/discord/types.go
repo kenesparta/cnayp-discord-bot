@@ -1,132 +1,11 @@
 package discord
 
-import (
-	"encoding/json"
-	"fmt"
-)
-
-// Intents select which events the gateway sends. They are a bitfield; see
-// https://discord.com/developers/docs/topics/gateway#gateway-intents.
-type Intents int
-
-// The intents this bot may request. Privileged ones need Discord's approval.
-const (
-	IntentGuilds         Intents = 1 << 0
-	IntentGuildMembers   Intents = 1 << 1 // privileged
-	IntentGuildMessages  Intents = 1 << 9
-	IntentMessageContent Intents = 1 << 15 // privileged
-)
-
-// opcode identifies the kind of gateway payload.
-type opcode int
-
-const (
-	opDispatch             opcode = 0
-	opHeartbeat            opcode = 1
-	opIdentify             opcode = 2
-	opResume               opcode = 6
-	opReconnect            opcode = 7
-	opInvalidSession       opcode = 9
-	opHello                opcode = 10
-	opHeartbeatAcknowledge opcode = 11
-)
-
-func (o opcode) String() string {
-	switch o {
-	case opDispatch:
-		return "dispatch"
-	case opHeartbeat:
-		return "heartbeat"
-	case opIdentify:
-		return "identify"
-	case opResume:
-		return "resume"
-	case opReconnect:
-		return "reconnect"
-	case opInvalidSession:
-		return "invalid session"
-	case opHello:
-		return "hello"
-	case opHeartbeatAcknowledge:
-		return "heartbeat ack"
-	default:
-		return fmt.Sprintf("opcode(%d)", int(o))
-	}
-}
-
-// Dispatch event names the bot reacts to.
-const (
-	eventReady             = "READY"
-	eventResumed           = "RESUMED"
-	eventInteractionCreate = "INTERACTION_CREATE"
-)
-
-// incoming is a gateway payload as received. The data stays raw until the
-// opcode says how to interpret it.
-type incoming struct {
-	Op       opcode          `json:"op"`
-	Data     json.RawMessage `json:"d"`
-	Sequence int64           `json:"s"`
-	Type     string          `json:"t"`
-}
-
-// outgoing is a gateway payload as sent. Data is always encoded, including as
-// null, because the heartbeat opcode requires the field to be present.
-type outgoing struct {
-	Op   opcode `json:"op"`
-	Data any    `json:"d"`
-}
-
-// hello carries the heartbeat interval the gateway expects us to keep.
-type hello struct {
-	HeartbeatIntervalMillis int `json:"heartbeat_interval"`
-}
-
-// identify opens a fresh gateway session.
-type identify struct {
-	Token      string             `json:"token"`
-	Intents    Intents            `json:"intents"`
-	Properties identifyProperties `json:"properties"`
-}
-
-type identifyProperties struct {
-	OS      string `json:"os"`
-	Browser string `json:"browser"`
-	Device  string `json:"device"`
-}
-
-// resume continues a session that was interrupted, replaying missed events.
-type resume struct {
-	Token     string `json:"token"`
-	SessionID string `json:"session_id"`
-	Sequence  int64  `json:"seq"`
-}
-
-// A User is a Discord account, either human or bot.
-type User struct {
-	ID       string `json:"id"`
-	Username string `json:"username"`
-	Bot      bool   `json:"bot"`
-}
+import "encoding/json"
 
 // An Application is the bot's own application entry, needed to publish commands.
+// [Client.CurrentApplication] reads it.
 type Application struct {
 	ID string `json:"id"`
-}
-
-// An UnavailableGuild is a guild the gateway has not sent in full yet.
-type UnavailableGuild struct {
-	ID          string `json:"id"`
-	Unavailable bool   `json:"unavailable"`
-}
-
-// Ready is the first dispatch of a new session.
-type Ready struct {
-	SessionID        string             `json:"session_id"`
-	ResumeGatewayURL string             `json:"resume_gateway_url"`
-	User             User               `json:"user"`
-	Application      Application        `json:"application"`
-	Guilds           []UnavailableGuild `json:"guilds"`
 }
 
 // ApplicationCommandType distinguishes slash commands from context-menu entries.
@@ -247,8 +126,23 @@ const (
 // MessageFlags modify how a message is delivered.
 type MessageFlags int
 
-// FlagEphemeral shows the message only to the user who triggered the interaction.
-const FlagEphemeral MessageFlags = 1 << 6
+// The flags the bot sets on the messages it sends.
+const (
+	// FlagSuppressEmbeds stops Discord from generating a preview card for the
+	// links in a message. A list of ten events would otherwise arrive as a list
+	// of ten cards.
+	FlagSuppressEmbeds MessageFlags = 1 << 2
+
+	// FlagEphemeral shows the message only to the user who triggered the
+	// interaction.
+	FlagEphemeral MessageFlags = 1 << 6
+
+	// FlagSuppressNotifications delivers a message without a push or desktop
+	// notification. It still appears in the channel, and still marks it unread:
+	// it is the difference between a bot worth keeping unmuted and one that is
+	// not.
+	FlagSuppressNotifications MessageFlags = 1 << 12
+)
 
 // An InteractionResponse is the bot's reply to an interaction.
 type InteractionResponse struct {
@@ -260,6 +154,38 @@ type InteractionResponse struct {
 type InteractionResponseData struct {
 	Content string       `json:"content,omitempty"`
 	Flags   MessageFlags `json:"flags,omitempty"`
+}
+
+// AllowedMentions says which mentions Discord may resolve in a message body.
+//
+// It matters because the default is permissive: a message sent without it has
+// every @everyone, @here, role and user mention in its text parsed. For a
+// message assembled from titles hundreds of strangers wrote, that default is
+// the whole risk, and it is why [NoMentions] exists rather than a bare struct
+// literal at each call site.
+type AllowedMentions struct {
+	// Parse is the set of mention kinds to resolve. An empty, non-nil slice
+	// resolves none; a nil slice would encode as null and restore the default.
+	Parse []string `json:"parse"`
+}
+
+// NoMentions resolves no mention of any kind.
+func NoMentions() *AllowedMentions {
+	return &AllowedMentions{Parse: []string{}}
+}
+
+// A Message is a message the bot creates in a channel.
+type Message struct {
+	// Content is the message body, up to 2000 characters.
+	Content string `json:"content,omitempty"`
+
+	// Flags modify delivery; see [FlagSuppressEmbeds] and
+	// [FlagSuppressNotifications].
+	Flags MessageFlags `json:"flags,omitempty"`
+
+	// AllowedMentions is never omitted in practice: [Client.CreateMessage] fills
+	// it with [NoMentions] when a caller leaves it nil.
+	AllowedMentions *AllowedMentions `json:"allowed_mentions,omitempty"`
 }
 
 // MessageReply builds the common case: a plain visible message.

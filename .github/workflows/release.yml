@@ -1,20 +1,30 @@
 name: Release image
 
-# Builds the bot's image and pushes it to the private Amazon ECR repository
-# `cnayp-discord-bot` in us-east-1. The job authenticates by assuming the IAM
-# role `github-actions-ecr-push-cnayp-discord-bot` through GitHub's OIDC
-# provider; its trust policy admits only refs/heads/main and refs/tags/v* of
-# this repo, and it may push to that one repository and nothing else. No AWS
-# access keys exist on either side.
+# Builds the bot's image, pushes it to the private Amazon ECR repository
+# `cnayp-discord-bot` in us-east-1, and on a v* tag deploys it to the bot's two
+# Lambda functions (personal-infra §5.24):
+#
+#   cnayp_discord_bot             answers interactions (BOT_MODE=interactions)
+#   cnayp_discord_bot_announcer   the scheduled runs   (BOT_MODE=announce)
+#
+# Both run the same image, so both point at the same digest. Terraform leaves
+# image_uri to this workflow (personal-infra G48). After the deploy the
+# announcer, the function that holds the token, is invoked to register the
+# slash commands, so the token never leaves it.
+#
+# The job authenticates by assuming the IAM role
+# `github-actions-ecr-push-cnayp-discord-bot` through GitHub's OIDC provider;
+# its trust policy admits only refs/heads/main and refs/tags/v* of this repo. It
+# may push to that one repository, update those two functions and invoke the
+# announcer, and nothing else. No AWS access keys exist on either side.
 #
 # The role's ARN is the secret AWS_ECR_PUSH_ROLE_ARN. It is deliberately not
 # site.yml's AWS_ROLE_ARN: that one is a different role, for the legal pages,
 # and the two stay separate — one role, one repository, one resource. Both are
 # provisioned in the personal-infra repo (make output NAME=ecr_push_role_arns).
 #
-# The personal-infra host deploys `:latest`, and only a v* tag moves it, so
-# cutting a release is what puts the bot live. Pushes to main publish `:edge`
-# and `:sha-<short>` without touching what the host runs.
+# Only a v* tag deploys. Pushes to main publish `:edge` and `:sha-<short>`
+# without touching what the functions run.
 #
 # The registry host (<account>.dkr.ecr.us-east-1.amazonaws.com) is never
 # written here; it comes from amazon-ecr-login's `registry` output.
@@ -30,6 +40,10 @@ permissions:
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
+
+env:
+  INTERACTIONS_FUNCTION: cnayp_discord_bot
+  ANNOUNCER_FUNCTION: cnayp_discord_bot_announcer
 
 jobs:
   image:
@@ -59,11 +73,41 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=sha,format=short
 
-      - uses: docker/build-push-action@v7
+      - id: build
+        uses: docker/build-push-action@v7
         with:
           context: .
+          platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          # Lambda refuses an image index: without attestations the push is a
+          # single manifest (personal-infra G49).
+          provenance: false
+          sbom: false
+
+      - name: Deploy to both functions
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          IMAGE_URI: ${{ steps.ecr.outputs.registry }}/cnayp-discord-bot@${{ steps.build.outputs.digest }}
+        run: |
+          for fn in "$INTERACTIONS_FUNCTION" "$ANNOUNCER_FUNCTION"; do
+            aws lambda update-function-code --function-name "$fn" --image-uri "$IMAGE_URI" \
+              --query '[FunctionName,LastUpdateStatus]' --output text
+          done
+          for fn in "$INTERACTIONS_FUNCTION" "$ANNOUNCER_FUNCTION"; do
+            aws lambda wait function-updated --function-name "$fn"
+            aws lambda get-function --function-name "$fn" --query 'Code.ResolvedImageUri' --output text
+          done
+
+      - name: Register the slash commands
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          aws lambda invoke --function-name "$ANNOUNCER_FUNCTION" \
+            --cli-binary-format raw-in-base64-out --payload '{"action":"register-commands"}' \
+            --query 'FunctionError' --output text result.json
+          cat result.json; echo
+          # The answer is the handler's JSON: {"registered": n} or {"error": "..."}.
+          grep -q '"registered"' result.json

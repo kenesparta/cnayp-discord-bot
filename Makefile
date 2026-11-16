@@ -9,7 +9,7 @@ SECRETS := secrets/prod.enc.yaml
 # path instead. Override if your age identity lives somewhere else.
 export SOPS_AGE_KEY_FILE ?= $(HOME)/.config/sops/age/keys.txt
 
-.PHONY: build test lint tidy run docker secrets-edit secrets-show
+.PHONY: build test lint contract tidy run docker secrets-edit secrets-show
 
 build:
 	go build -trimpath -o $(BIN) ./cmd/bot
@@ -21,13 +21,23 @@ lint:
 	go vet ./...
 	golangci-lint run
 
+# Checks the public event calendars against the assumptions internal/events
+# makes about them. It reaches the network, so it is deliberately not part of
+# `test`: a failure means an upstream moved, not that the bot broke.
+contract:
+	go test -count=1 -tags contract -run TestContract -v ./internal/events/
+
 tidy:
 	go mod tidy
 
-# Runs the bot with the decrypted secrets injected as environment variables;
-# nothing is ever written to disk in the clear.
+# Runs the announcer locally, with the decrypted secrets injected as environment
+# variables; nothing is ever written to disk in the clear. It serves POST /events
+# on :8080, as the Lambda Web Adapter would, and keeps its records in memory.
+# The secrets carry no DISCORD_EVENTS_CHANNEL_ID, so the announcer is off, and
+#   curl -X POST localhost:8080/events -d '{"action":"register-commands"}'
+# publishes the command set to the guild for real.
 run:
-	sops exec-env $(SECRETS) 'go run ./cmd/bot'
+	sops exec-env $(SECRETS) 'BOT_MODE=announce go run ./cmd/bot'
 
 docker:
 	docker build -t $(IMAGE):dev .

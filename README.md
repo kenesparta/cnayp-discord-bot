@@ -1,9 +1,21 @@
 # cnayp-discord-bot
 
-A Discord bot in Go with **no external dependencies** — the WebSocket transport (RFC 6455) and the
-Discord API client are implemented here on top of the standard library. It currently serves two
-slash commands — `/ping`, which reports gateway latency to the channel, and `/test`, an ephemeral
-deploy smoke check — and is meant as a base to grow from.
+A Discord bot in Go with **no external dependencies** — the Discord API client, AWS request signing,
+a DynamoDB client and the event calendar clients are implemented here on top of the standard library.
+It serves two slash commands — `/ping`, which answers `pong`, and `/test`, an ephemeral deploy smoke
+check — and, once a day, posts upcoming cloud native events into one channel, merged from three
+public calendars: the CNCF community groups, the Kubernetes Community Days, and the Linux
+Foundation's conferences.
+
+It runs as two AWS Lambda functions built from one image, chosen by `BOT_MODE`:
+
+- **`interactions`** — Discord delivers each slash command to its Function URL over HTTPS, signed with
+  the application's key; the reply goes back in the HTTP response. It holds no secret.
+- **`announce`** — EventBridge Scheduler invokes it daily at 13:00 UTC. It keeps what each calendar
+  listed in a DynamoDB table, so it can tell what is new, and it registers the slash commands when CI
+  asks it to after a release.
+
+There is no gateway connection: nothing in Lambda holds a WebSocket for days.
 
 It runs for the **Cloud Native Ayacucho Community (CNAYP)**, a volunteer community that meets to
 learn about cloud native technologies, and is used for educational and informational purposes only.
@@ -26,45 +38,56 @@ It is an independent project, not endorsed by or affiliated with the CNCF, the L
    make secrets-edit    # sets DISCORD_TOKEN in secrets/prod.enc.yaml
    ```
 
-4. Run it:
+4. Run the announcer locally (records in memory; the secrets carry no announcement channel, so it
+   only registers commands when asked):
 
    ```sh
    make run
+   curl -X POST localhost:8080/events -d '{"action":"register-commands"}'   # publishes for real
    ```
 
-`DISCORD_GUILD_ID` is set in `secrets/prod.enc.yaml`, so both `make run` and the deployed container
-register the commands in the CNAYP guild rather than globally. That is deliberate: the bot serves one
+`DISCORD_GUILD_ID` is set in `secrets/prod.enc.yaml` and in `personal-infra`, so both `make run` and
+the deployed functions register the commands in the CNAYP guild rather than globally. That is deliberate: the bot serves one
 community, and a guild-scoped bulk overwrite takes effect immediately where a global one needs up to
 an hour to propagate. Unset it only if the bot is ever meant to serve servers beyond CNAYP.
 
 ## Configuration
 
-| Variable           | Required | Default | Description                                        |
-| ------------------ | -------- | ------- | -------------------------------------------------- |
-| `DISCORD_TOKEN`    | yes      | —       | Bot token from the developer portal.                |
-| `DISCORD_GUILD_ID` | no       | global  | Guild to register commands in. Set to the CNAYP guild — see above. |
-| `LOG_LEVEL`        | no       | `info`  | `debug`, `info`, `warn` or `error`.                 |
+| Variable           | Mode | Required | Default | Description |
+| ------------------ | ---- | -------- | ------- | ----------- |
+| `BOT_MODE`         | both | yes      | —       | `interactions` or `announce`. |
+| `DISCORD_PUBLIC_KEY` | interactions | yes | — | The application's public key (64 hex), from the Developer Portal. Public. |
+| `DISCORD_TOKEN`    | announce | yes  | —       | Bot token. On Lambda it is to come from `passkana`, the owner's vault. |
+| `DISCORD_GUILD_ID` | announce | no   | global  | Guild to register commands in. Set to the CNAYP guild — see above. |
+| `DISCORD_EVENTS_CHANNEL_ID` | announce | no | off | Channel for the daily event announcements. Unset leaves the announcer off. |
+| `STATE_TABLE`      | announce | on Lambda, with a channel | memory | DynamoDB table for the announcer's records. |
+| `LOG_LEVEL`        | both | no       | `info`  | `debug`, `info`, `warn` or `error`. |
+
+Lambda supplies `AWS_LWA_PORT` (default `8080`), `AWS_REGION` and the execution role's credentials;
+`personal-infra` sets the rest.
 
 ## Layout
 
 ```
-cmd/bot/            main(): config, signals, shutdown
-internal/config/    environment parsing and validation
-internal/bot/       command registry and interaction routing
+cmd/bot/            main(): config, the mode's handler, signals, shutdown
+internal/config/    environment parsing and validation, per mode
+internal/bot/       the two HTTP handlers (interactions, /events) and command registration
 internal/command/   one file per slash command; All() is the registry
-internal/discord/   Discord REST client and gateway session
-internal/websocket/ RFC 6455 client: handshake, framing, masking, close
-deployments/        docker compose for running the published image
+internal/announce/  the daily run: what is new, rendering, publishing
+internal/events/    the three public event calendars (no Discord in it)
+internal/state/     the announcer's records: DynamoDB on Lambda, memory locally
+internal/discord/   Discord REST client and interaction signature verification
+internal/awsapi/    Signature Version 4 and a minimal DynamoDB client
 secrets/            sops-encrypted secrets
 ```
 
-Each layer depends only on the ones below it: `bot` → `discord` → `websocket`.
+Each layer depends only on the ones below it.
 
 ## Adding a command
 
 Add a file to `internal/command` returning a `Command`, then add it to `All()` in `command.go`.
-Publishing is a bulk overwrite on every connect, so Discord picks up additions and removals on
-restart.
+Publishing is a bulk overwrite on every release, when CI invokes the announcer's
+`register-commands`, so Discord picks up additions and removals then.
 
 ```go
 func echo() Command {
@@ -78,17 +101,17 @@ func echo() Command {
 				Description: "What to repeat", Required: true,
 			}},
 		},
-		Handle: func(ctx context.Context, r Responder, i *discord.Interaction) error {
+		Handle: func(_ context.Context, i *discord.Interaction) (discord.InteractionResponse, error) {
 			option, _ := i.Data.Option("text")
 			text, _ := option.StringValue()
-			return r.Respond(ctx, i, discord.MessageReply(text))
+			return discord.MessageReply(text), nil
 		},
 	}
 }
 ```
 
-Discord discards a response that arrives more than three seconds after the interaction. A handler
-that cannot be that fast should send a `discord.DeferredMessageResponse` first.
+The handler runs inside Discord's HTTP request, which Discord abandons after three seconds. A handler
+that cannot be that fast must return a `discord.DeferredMessageResponse` and finish another way.
 
 ## Secrets
 
@@ -115,7 +138,8 @@ Discord requires a Terms of Service and Privacy Policy URL for the application. 
 - Terms of Service — https://cnayp-bot.kenesparta.dev/terms.html
 - Privacy Policy — https://cnayp-bot.kenesparta.dev/privacy.html
 
-The bot itself serves no HTTP; it only dials out to Discord. The site is a separate static deploy,
+The bot does not serve these pages. Its interactions function answers only Discord's signed POSTs, and
+its announcer has no URL; the site is a separate static deploy,
 run by `.github/workflows/site.yml` on `v*` tags — a legal document goes live because a release was
 cut, not because `main` moved. It authenticates to AWS by assuming an IAM role through GitHub's OIDC
 provider, so no AWS access keys exist on either side.
@@ -145,24 +169,32 @@ Preview locally with any static server, for example:
 python3 -m http.server -d site 8000    # http://localhost:8000/terms.html
 ```
 
-Both documents describe the bot's actual data handling, which follows from the `GUILDS`-only gateway
-intent and the absence of any persistent storage. **Changing either — widening intents, adding a
-database or a cache, or logging new fields — means updating the Privacy Policy in the same change.**
+Both documents describe the bot's actual data handling, which follows from what Discord delivers (the
+interactions someone runs, and nothing else), what the announcer stores (the identifiers of public
+events each calendar listed, and per-calendar counts, never anything about a person), and the fact
+that the only hosts it talks to are Discord, the three public event calendars and AWS. **Changing any
+of those — receiving more from Discord, storing anything new, logging new fields, calling a new
+third-party host, or posting somewhere new — means updating the Privacy Policy in the same change.**
 
 ## Application metadata
 
 What the Developer Portal shows users in the "Add App" dialog. It lives in Discord, not in this repo,
 so it is recorded here to keep it reviewable:
 
-> A bot for the Cloud Native Ayacucho Community (CNAYP). Shares learning material, documentation and
-> meetup announcements. Educational and informational use only; it cannot read your messages and
-> stores nothing.
+> A bot for the Cloud Native Ayacucho Community (CNAYP). Shares learning material and documentation,
+> and posts upcoming cloud native events from public CNCF and Linux Foundation calendars into one
+> channel on a daily schedule. Educational and informational use only; it cannot read your messages
+> and stores no personal information.
+
+The portal is edited by hand and CI cannot see it: after changing the text above, paste it into the
+Developer Portal before cutting the release.
 
 Tags: `cloud native`, `community`, `kubernetes`, `peru`, `education` (max 5, 20 characters each).
 
 That description repeats the Privacy Policy's two load-bearing claims — no message reading, no
-storage — so **the constraint above covers it as well**: widening intents or adding storage
-falsifies the portal text too, and nothing in CI will catch that.
+personal information stored — so **the constraint above covers it as well**: receiving more from
+Discord or storing anything about a person falsifies the portal text too, and nothing in CI will
+catch that.
 
 The description and tags are settable through the API; the Terms of Service and Privacy Policy URLs
 are **not** — `PATCH /applications/@me` ignores them, so those two fields have to be edited by hand
@@ -182,15 +214,16 @@ sops exec-env secrets/prod.enc.yaml \
 ## Deployment
 
 `.github/workflows/release.yml` pushes the image to the private Amazon ECR repository
-`cnayp-discord-bot` in `us-east-1`. Pushes to `main` publish `:edge` and `:sha-<short>`; `v*` tags
-publish semver tags and `:latest`. The production host, run from the `personal-infra` repository,
-pulls `:latest` every ten minutes, so cutting a `v*` tag is what puts a release live — a push to
-`main` does not.
+`cnayp-discord-bot` in `us-east-1`. Pushes to `main` publish `:edge` and `:sha-<short>` and deploy
+nothing. A `v*` tag publishes semver tags and `:latest`, then points **both** Lambda functions —
+`cnayp_discord_bot` and `cnayp_discord_bot_announcer` — at the pushed digest, and invokes the
+announcer with `{"action":"register-commands"}`. Cutting a `v*` tag is what puts a release live.
 
-The workflow authenticates by assuming the IAM role `github-actions-ecr-push-cnayp-discord-bot`
-through GitHub's OIDC provider. Its trust policy admits only `main` and `v*` tags of this repo, and it
-can push to that one ECR repository and nothing else; the repository and the role are both Terraform
-in `personal-infra`. **One-time setup by the owner:** store the role's ARN as the repository secret
+The functions, the state table, the schedule and the role are Terraform in `personal-infra` (its spec
+§5.24). The workflow authenticates by assuming the IAM role `github-actions-ecr-push-cnayp-discord-bot`
+through GitHub's OIDC provider. Its trust policy admits only `main` and `v*` tags of this repo; it can
+push to that one ECR repository, update those two functions and invoke the announcer, and nothing
+else. **One-time setup by the owner:** store the role's ARN as the repository secret
 `AWS_ECR_PUSH_ROLE_ARN`, reading it in `personal-infra` with:
 
 ```sh
@@ -201,11 +234,7 @@ That is a different secret from the policy site's `AWS_ROLE_ARN`, for a differen
 the two stay separate. The registry host is not written anywhere in this repo; the workflow takes it
 from `amazon-ecr-login`.
 
-To run the image on some other host by hand, log in to the registry first, then start it through
-sops:
-
-```sh
-export ECR_REGISTRY=<account>.dkr.ecr.us-east-1.amazonaws.com
-aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin "$ECR_REGISTRY"
-sops exec-env secrets/prod.enc.yaml 'docker compose -f deployments/docker-compose.yaml up -d'
-```
+In the Developer Portal, **Interactions Endpoint URL** is the interactions function's URL. Discord
+tests it when it is saved — a `PING` that must get `PONG`, and a deliberately bad signature that must
+get `401` — so the function has to be live first, and saving it moves delivery off any gateway
+connection at once.

@@ -1,0 +1,33 @@
+# Checks that the public event calendars still answer the way internal/events
+# assumes they do. A failure here means an upstream moved, not that the bot
+# broke, which is why it runs on a schedule of its own rather than in CI: an
+# outage at either calendar must never fail a build or block a release.
+name: Contract
+
+on:
+  schedule:
+    # Shortly before the bot's own daily run, so a drift is known by the time it
+    # would have mattered.
+    - cron: "0 12 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: contract
+  cancel-in-progress: true
+
+jobs:
+  calendars:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check the event calendars against the assumptions
+        run: go test -count=1 -tags contract -run TestContract -v ./internal/events/
