@@ -41,7 +41,6 @@ func collectorWith(calendars ...*stubCalendar) *Collector {
 	return &Collector{
 		calendars: over,
 		logger:    discardLogger(),
-		lastGood:  make(map[Source]int, len(calendars)),
 	}
 }
 
@@ -80,7 +79,7 @@ func TestCollectMergesEveryCalendar(t *testing.T) {
 
 	kcd := &stubCalendar{source: SourceKCD, events: []Event{kcdEventAt("c", 40)}}
 
-	set, health := collectorWith(community, conference, kcd).Collect(t.Context(), runClock)
+	set, health := collectorWith(community, conference, kcd).Collect(t.Context(), runClock, nil)
 
 	if len(set) != 3 {
 		t.Fatalf("collected %d events, want 3", len(set))
@@ -106,7 +105,7 @@ func TestCollectTreatsAnEmptyCalendarAsAFailure(t *testing.T) {
 	conference := &stubCalendar{source: SourceConference, events: []Event{conferenceEventAt("b", 10)}}
 
 	collector := collectorWith(community, conference)
-	_, health := collector.Collect(t.Context(), runClock)
+	_, health := collector.Collect(t.Context(), runClock, nil)
 
 	report := health[0]
 	if report.Status != StatusFailed {
@@ -116,8 +115,8 @@ func TestCollectTreatsAnEmptyCalendarAsAFailure(t *testing.T) {
 	if !errors.As(report.Err, &sourceErr) || sourceErr.Code != CodeEmpty {
 		t.Errorf("Err = %v, want %q", report.Err, CodeEmpty)
 	}
-	if collector.lastGood[SourceCommunity] != 0 {
-		t.Error("an empty answer updated the baseline the degraded guard compares against")
+	if report.OK() {
+		t.Error("an empty answer reported OK, and its count would become the next floor")
 	}
 }
 
@@ -129,13 +128,14 @@ func TestCollectTreatsACollapsedCountAsDegraded(t *testing.T) {
 	conference := &stubCalendar{source: SourceConference, events: []Event{conferenceEventAt("b", 10)}}
 	collector := collectorWith(community, conference)
 
-	if _, health := collector.Collect(t.Context(), runClock); !health[0].OK() {
-		t.Fatalf("first run = %q, want ok", health[0].Status)
+	_, first := collector.Collect(t.Context(), runClock, nil)
+	if !first[0].OK() {
+		t.Fatalf("first run = %q, want ok", first[0].Status)
 	}
 
 	// The next run answers with a tenth of that.
 	community.events = community.events[:10]
-	_, health := collector.Collect(t.Context(), runClock)
+	_, health := collector.Collect(t.Context(), runClock, Floors{SourceCommunity: first[0].Records})
 
 	if health[0].Status != StatusDegraded {
 		t.Errorf("Status = %q, want %q", health[0].Status, StatusDegraded)
@@ -154,11 +154,11 @@ func TestCollectAcceptsANormalFluctuation(t *testing.T) {
 	conference := &stubCalendar{source: SourceConference, events: []Event{conferenceEventAt("b", 10)}}
 	collector := collectorWith(community, conference)
 
-	collector.Collect(t.Context(), runClock)
+	_, first := collector.Collect(t.Context(), runClock, nil)
 
 	// Half the events is a plausible week, not a broken filter.
 	community.events = community.events[:5]
-	_, health := collector.Collect(t.Context(), runClock)
+	_, health := collector.Collect(t.Context(), runClock, Floors{SourceCommunity: first[0].Records})
 
 	if !health[0].OK() {
 		t.Errorf("Status = %q, want ok: half is above the floor", health[0].Status)
@@ -174,7 +174,7 @@ func TestCollectSurvivesOneCalendarFailing(t *testing.T) {
 		conferenceEventAt("b", 10), conferenceEventAt("c", 20),
 	}}
 
-	set, health := collectorWith(community, conference).Collect(t.Context(), runClock)
+	set, health := collectorWith(community, conference).Collect(t.Context(), runClock, nil)
 
 	if len(set) != 2 {
 		t.Errorf("collected %d events, want the healthy calendar's 2", len(set))
@@ -191,7 +191,7 @@ func TestCollectReturnsNothingWhenEveryCalendarFails(t *testing.T) {
 	community := &stubCalendar{source: SourceCommunity, err: &SourceError{Code: CodeRejected, Status: 503}}
 	conference := &stubCalendar{source: SourceConference, err: &SourceError{Code: CodeUnreachable}}
 
-	set, health := collectorWith(community, conference).Collect(t.Context(), runClock)
+	set, health := collectorWith(community, conference).Collect(t.Context(), runClock, nil)
 
 	if len(set) != 0 {
 		t.Errorf("collected %d events, want none", len(set))
@@ -207,7 +207,7 @@ func TestCollectReportsSkippedRecords(t *testing.T) {
 	community := &stubCalendar{source: SourceCommunity, events: []Event{communityEventAt("a", 3)}, skipped: 2}
 	conference := &stubCalendar{source: SourceConference, events: []Event{conferenceEventAt("b", 10)}}
 
-	_, health := collectorWith(community, conference).Collect(t.Context(), runClock)
+	_, health := collectorWith(community, conference).Collect(t.Context(), runClock, nil)
 
 	if health[0].Skipped != 2 {
 		t.Errorf("Skipped = %d, want 2", health[0].Skipped)
@@ -234,7 +234,7 @@ func TestNewReadsEveryCalendarOverOneClient(t *testing.T) {
 		WithKCDBaseURL(srv.URL),
 	)
 
-	set, health := collector.Collect(t.Context(), runClock)
+	set, health := collector.Collect(t.Context(), runClock, nil)
 
 	if len(paths) != 3 {
 		t.Fatalf("requested %v, want all three calendars", paths)

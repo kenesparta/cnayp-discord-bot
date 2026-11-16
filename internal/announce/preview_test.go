@@ -26,7 +26,7 @@ func TestContractRendersLiveCalendars(t *testing.T) {
 	collector := events.New(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn})))
 
 	now := time.Now()
-	set, health := collector.Collect(t.Context(), now)
+	set, health := collector.Collect(t.Context(), now, nil)
 	for _, report := range health {
 		t.Logf("calendar %s: %s, %d records, %d skipped", report.Source, report.Status, report.Records, report.Skipped)
 	}

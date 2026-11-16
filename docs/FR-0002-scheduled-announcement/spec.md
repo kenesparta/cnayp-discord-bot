@@ -15,6 +15,11 @@ Discord's side would post the digest five times. The scheduler is therefore owne
 goroutine cancelled by the same context and awaited by the same `WaitGroup` the repository requires of every goroutine,
 and it never observes the gateway at all.
 
+> **Amended 2026-11-16 (the move to Lambda, personal-infra AD-21).** The two sections below describe the in-process
+> design. On Lambda, EventBridge Scheduler invokes each run; `nextRun` only names the next slot in the run's log line.
+> The seen set became a per-calendar record in DynamoDB (`internal/state`), saved before anything is published, and a
+> failed calendar keeps its record. Spec-0001's amended *Delta detection* paragraph and NFR-0002 are authoritative.
+
 **Why the schedule is wall-clock rather than a ticker.** `time.NewTicker(24*time.Hour)` measures elapsed process time.
 The image publishes on every push to the default branch and the container restarts on each deploy, so an elapsed-time
 ticker would drift with deployments and never complete a cycle on a busy week; the monotonic clock it reads also does
@@ -63,7 +68,7 @@ nothing. No message ever pings anyone, and only the digest reaches a phone.
 | NFR | How this spec meets it |
 | --- | ---------------------- |
 | NFR-0001 No third-party dependencies | stdlib only; the Discord client already exists in this module. |
-| NFR-0002 No persistent storage | The seen set is a map on the `Announcer`; nothing is written anywhere. |
+| NFR-0002 No personal information stored (amended 2026-11-16) | The per-calendar record goes through `announce.Store` into DynamoDB (`internal/state`); it holds public event identities, counts and digest dates only. |
 | NFR-0003 No new platform privileges | No intent change. The bot needs `VIEW_CHANNEL` and `SEND_MESSAGES` on the channel and nothing else — not `READ_MESSAGE_HISTORY`, not `EMBED_LINKS`, not `MENTION_EVERYONE`. |
 | NFR-0006 Log hygiene | The outcome line carries counts, statuses and times. No title, no channel content, no user identifier is ever logged. |
 | NFR-0007 No unintended mentions | `allowed_mentions.parse` is an empty array on every create. |

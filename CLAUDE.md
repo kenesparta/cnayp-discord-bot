@@ -5,9 +5,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Overview
 
 A Discord bot in Go (module `github.com/kenesparta/cnayp-discord-bot`, Go 1.26.5) with **zero external
-dependencies** — the WebSocket protocol and the Discord API client are implemented in this repo on
-top of the standard library. It is an intentionally small starting point (one `/ping` command)
+dependencies** — the Discord API client, Ed25519 interaction verification, AWS Signature Version 4 and
+a minimal DynamoDB client are implemented in this repo on top of the standard library. It serves two
+slash commands (`/ping`, `/test`) and announces upcoming cloud native events once a day, and it is
 designed so features are added by growing `internal/`, not by restructuring.
+
+It runs as **two AWS Lambda functions built from one image**, chosen by `BOT_MODE` (personal-infra
+spec §5.24, AD-21): `interactions` answers the slash commands Discord POSTs to its Function URL, and
+`announce` performs the run EventBridge Scheduler invokes daily at 13:00 UTC. Both sit behind the
+Lambda Web Adapter, so the binary is a plain HTTP server. There is no gateway connection.
 
 Keep `go.mod` dependency-free. Adding a third-party module is a deliberate decision, not a default;
 prefer writing the small piece that is actually needed (`zen-copy-over-dependency`).
@@ -23,12 +29,12 @@ Commit only with the current user as author. Never add a `Co-Authored-By: Claude
 make build          # -> bin/bot
 make test           # go test -race ./...
 make lint           # go vet + golangci-lint (v2 config in .golangci.yml)
-make run            # sops exec-env + go run ./cmd/bot
+make run            # the announcer locally: sops exec-env + BOT_MODE=announce go run ./cmd/bot
 make docker         # local image build
 make secrets-edit   # decrypt, open $EDITOR, re-encrypt in place
 
-go test -run '^TestSessionIdentifiesAndBecomesReady$' ./internal/discord   # single test
-go test -run '^TestReadFrame$/^masked_server_frame_is_rejected$' ./internal/websocket   # subtest
+go test -run '^TestInteractionsAnswersPingWithPong$' ./internal/bot   # single test
+go test -run '^TestLoadRefuses$/^a_truncated_key$' ./internal/config   # subtest
 ```
 
 Run `make lint` before pushing — CI runs golangci-lint v2 and it is stricter than `go vet`. In
@@ -43,75 +49,76 @@ lives under `internal/` so nothing outside the module can import it. `internal/a
 neither — it must never import a Discord type.
 
 ```
-cmd/bot            main(): config → signals → run() → exit code
-  └── internal/bot        command registry, interaction routing, publishing
+cmd/bot            main(): config → the mode's handler → bot.Serve → exit code
+  └── internal/bot        the two HTTP handlers, command registration, Serve
         └── internal/command   one file per slash command; All() is the registry
-        └── internal/announce  the daily event announcer: schedule, delta, rendering
-              └── internal/events    the three public event calendars (no Discord in it)
-        └── internal/discord   REST client + gateway session (the Discord protocol)
-              └── internal/websocket   RFC 6455 client (the transport)
+        └── internal/state     the announcer's records: DynamoDB on Lambda, memory locally
+              └── internal/announce  one run: what is new, rendering, publishing
+                    └── internal/events    the three public event calendars (no Discord in it)
+        └── internal/discord   REST client, interaction types, Ed25519 verification
+        └── internal/awsapi    SigV4 signing, the DynamoDB JSON protocol (no Discord in it)
 ```
 
-- **`internal/websocket`** — a client-only RFC 6455 implementation: TLS dial, the HTTP Upgrade
-  handshake with the `Sec-WebSocket-Accept` check, frame parse/write, client-side masking,
-  fragmentation reassembly, automatic pong replies, and close frames surfaced as `*CloseError`.
-  It deliberately rejects what it does not support (extensions, compression, masked server frames)
-  rather than tolerating it. It knows nothing about Discord.
+- **`internal/bot`** — `Interactions` serves `POST /` only: it verifies `X-Signature-Ed25519` before
+  reading anything, answers PING with PONG, and routes slash commands. `Events` serves `POST /events`
+  only — the Web Adapter's pass-through path, where the schedule's `{"action":"announce"}` and CI's
+  `{"action":"register-commands"}` arrive. `Registrar` publishes the command set.
+- **`internal/announce`** — `Announcer.Run` is one run against a `Store`. The schedule is not here.
+- **`internal/state`** — the item design for personal-infra's `cnayp-discord-bot-state` table
+  (`calendar#<source>`, `digest#<date>`), documented in `state.go`.
 - **`internal/discord`** — `Client` is the REST side (bot auth, JSON, `*APIError`, 429 retry with
-  `retry_after`). `Session` is the gateway side: Hello → Identify/Resume → heartbeat → dispatch,
-  with reconnect and backoff.
-- **`internal/bot`** — maps command names to handlers and owns what happens on READY.
-- **`internal/command`** — `All()` is the single registry; a new command is a new file plus one entry.
-- **`internal/config`** — the only place that reads the environment.
+  `retry_after`); `VerifyInteraction` checks Discord's signature.
+- **`internal/awsapi`** — `Sign` (tested against AWS's published `get-vanilla` vector) and the two
+  DynamoDB operations the records need.
+- **`internal/config`** — the only place that reads the environment, per mode.
 
 ### Conventions that matter
 
-- **Concurrency stays with the caller.** `Bot.Run` and `Session.Run` block; they do not spawn
-  detached goroutines or return channels. Every goroutine that is started has an owner that cancels
-  it and a `WaitGroup` that waits for it before its function returns.
-- **`Session.connect` unwinds deliberately.** Its defers are declared so they run as *cancel the
-  connection context → wait for the heartbeat and interaction goroutines → close the socket*.
-  Reordering those three lines leaks goroutines or closes the socket out from under them.
-- **Interaction handlers run on their own goroutine**, tracked by that same `WaitGroup`, so a slow
-  command cannot stall the read loop or the heartbeat.
-- **Commands are published with a bulk overwrite** on every READY, so Discord is reconciled to
-  `command.All()` — additions *and* deletions — in one call. Never register commands individually.
-- **`Bot.onInteraction` is the error boundary.** Nothing upstream can act on a command error, so it
-  is logged exactly once there and not propagated.
-- **A failed publish is not fatal**: previously registered commands keep working, so it logs and the
-  session runs on rather than dropping the connection.
-- **No credential reaches an error string.** `/interactions/{id}/{token}/callback` and
-  `/webhooks/{app_id}/{token}` carry a bearer-equivalent token in the URL, and interaction errors
-  get logged. Two things enforce this in `rest.go`: `redactPath` scrubs the token out of the path
-  stored on `APIError` and formatted into wrapped errors, and `withoutURL` unwraps `*url.Error`,
-  whose message quotes the whole request URL and would otherwise put it straight back. Any new error
-  built from a path must go through both. `TestInteractionErrorsNeverCarryTheToken` and
-  `TestTransportErrorsNeverCarryTheToken` are the guards.
-- **Fatal vs retryable disconnects** are decided by `fatalCloseError`. Close codes 4004/4010–4014
-  (bad token, bad intents, bad API version) end `Run`; everything else reconnects with backoff.
-  A new non-retryable code goes in that function, nowhere else.
-
-Gateway intents are `IntentGuilds` only (`internal/bot/bot.go`). Widen deliberately — message
-content is a privileged intent requiring Discord approval.
+- **The two handlers are never served together.** `/events` acts on whatever it is sent, so it may
+  exist only on the announcer, which has no URL; the interactions function, which anyone can call,
+  answers 404 there (personal-infra G60). Do not merge the modes into one function.
+- **Each mode holds only what it uses.** The interactions function gets the public key and nothing
+  secret; only the announcer gets the token and the table.
+- **Verify before reading.** Every interaction is checked against the public key before it is
+  decoded. Discord tests the endpoint on save with a deliberately bad signature that must get 401.
+- **Discord abandons a request after three seconds.** A handler runs inside it and returns its
+  response; anything slower returns a deferred response and finishes another way.
+- **The announcer saves before it publishes.** `Run` returns an error only while nothing has been
+  published (loading or saving the records failed), so a retry repeats nothing; a publishing
+  failure is logged, never returned, because a retry would post again what went out.
+- **The record is kept per calendar.** A failed or degraded calendar keeps yesterday's record, so its
+  recovery announces only what is genuinely new; a calendar with no record is seeded silently.
+- **The weekly digest is claimed before it is posted** (`digest#<date>`, a conditional put), because
+  the schedule delivers at least once.
+- **DynamoDB's TTL is not trusted to have run.** `state.Table` treats an expired record as absent.
+- **Concurrency stays with the caller.** `Serve` blocks, and the goroutine it starts is waited for
+  before it returns. Every goroutine that is started has an owner that cancels it and waits for it.
+- **Commands are published with a bulk overwrite**, so Discord is reconciled to `command.All()` —
+  additions *and* deletions — in one call. Never register commands individually. It happens when
+  CI invokes the announcer after a release.
+- **The interactions handler is the error boundary.** Nothing upstream can act on a command error, so
+  it is logged exactly once there, by command name only, and Discord is told the command failed.
+- **No credential reaches an error string or a log.** `/interactions/{id}/{token}/callback` and
+  `/webhooks/{app_id}/{token}` carry a bearer-equivalent token in the URL. Two things enforce this in
+  `rest.go`: `redactPath` scrubs the token out of the path stored on `APIError` and formatted into
+  wrapped errors, and `withoutURL` unwraps `*url.Error`, whose message quotes the whole request URL.
+  Any new error built from a path must go through both. `TestInteractionErrorsNeverCarryTheToken` and
+  `TestTransportErrorsNeverCarryTheToken` are the guards. `awsapi.Credentials` redacts itself in
+  every print path, slog included.
 
 ### Testing
 
-Protocol code is tested against real sockets, not mocks: `internal/websocket` runs a hand-written
-server over `net.Listen` and `net.Pipe`, and `internal/discord` stands up a `fakeGateway` that
-speaks the server half of the protocol plus an `httptest` REST stub. The server-side framing in
-`gateway_test.go` is intentional duplication — the client codec is unexported and must not be
-loosened for tests.
-
-Timing-sensitive gateway tests use short heartbeat intervals; they have been run with `-count=8
--race` clean. If one goes flaky, suspect the goroutine ownership in `connect`, not the timing.
+Protocol code is tested against real HTTP, not mocks of it: `internal/bot` signs requests with a
+generated Ed25519 key and serves them through the real handlers; `internal/discord` and
+`internal/awsapi` use `httptest` servers. `internal/announce` and `internal/state` use small fakes of
+the `Store` and of DynamoDB. `make contract` reaches the real calendars and posts nothing.
 
 ## Policy site
 
 `site/` holds the Terms of Service and Privacy Policy the Discord developer portal links to, served
-from S3 behind CloudFront at `cnayp-bot.kenesparta.dev`. **The bot process serves no HTTP at all** —
-it has no listener, no `EXPOSE`, and no published ports. It dials *out* to Discord and, once a day,
-to the three public event calendars in `internal/events`. The site is an entirely separate static
-deploy; do not add an HTTP server to the bot to host these.
+from S3 behind CloudFront at `cnayp-bot.kenesparta.dev`. **The bot does not serve these pages.** Its
+interactions function answers only Discord's signed POSTs, and its announcer has no URL. The site is
+an entirely separate static deploy; do not add routes to the bot to host these.
 
 The HTML in `site/` is the single source of truth — there is deliberately no Markdown copy, because
 two versions of a legal document drift.
@@ -122,17 +129,19 @@ for *educational and informational purposes only* (`terms.html` §2, and the dis
 advisory — would falsify it; widen §2 in the same change rather than letting the pages describe a
 narrower bot than the one that ships.
 
-The same two claims — no message reading, no storage — are also in the Discord application
+The same two claims — no message reading, no personal information stored — are also in the Discord application
 description, which lives in the Developer Portal rather than in git. It is transcribed in the README
 ("Application metadata") so a change here has somewhere to check against; the portal itself still has
 to be updated by hand, and CI cannot catch a drift.
 
-The Privacy Policy makes specific factual claims about the bot's behaviour: `GUILDS` intent only, no
-persistent storage, no permission to read message history, an outbound call to exactly three public
-event calendars, and logs that record command *names* and run counts but not argument values, user
-IDs, usernames, or anything an event's organiser wrote. Any change to intents, storage, outbound
-hosts, or the fields passed to `logger.*` falsifies one of those claims — update `site/privacy.html`
-in the same change.
+The Privacy Policy makes specific factual claims about the bot's behaviour: no gateway connection and
+no intents, interactions delivered signed over HTTPS, no permission to read message history, a stored
+record of public event identifiers and per-calendar counts (and digest dates) that expires after five
+weeks and holds nothing about a person, outbound calls to Discord, exactly three public event
+calendars and AWS, and logs that record command *names* and run counts but not argument values, user
+IDs, usernames, or anything an event's organiser wrote. Any change to what Discord delivers, what
+`internal/state` stores, outbound hosts, or the fields passed to `logger.*` falsifies one of those
+claims — update `site/privacy.html` in the same change.
 
 ### The AWS side lives in another repo
 
@@ -171,19 +180,20 @@ Adding a recipient (new maintainer or deploy host) means editing `.sops.yaml` an
 `.github/workflows/release.yml` builds and pushes to the private Amazon ECR repository
 `cnayp-discord-bot` (`us-east-1`) on pushes to `main` (`:edge`, `:sha-<short>`) and on `v*` tags
 (semver + `:latest`). The image is a static `CGO_ENABLED=0` binary on `distroless/static`, running
-as `nonroot`. The personal-infra host deploys `:latest`, so a `v*` tag is what goes live.
+as `nonroot`, with the Lambda Web Adapter as an extension (it is statically linked too). **Only a
+`v*` tag deploys**: it points both functions at the pushed digest (Terraform ignores `image_uri`,
+personal-infra G48), builds with `provenance: false` / `sbom: false` because Lambda refuses an image
+index (G49), then invokes the announcer with `{"action":"register-commands"}`.
 
 - **It assumes `github-actions-ecr-push-cnayp-discord-bot` over OIDC via the secret
   `AWS_ECR_PUSH_ROLE_ARN`** — a different role and secret from `site.yml`'s `AWS_ROLE_ARN`. Never
-  point both workflows at one role: one role, one repository, one resource. The ECR repository and
-  the role are Terraform in `personal-infra`, like the site's resources.
+  point both workflows at one role: one role, one repository, one resource. The ECR repository, the
+  two functions, the state table, the schedule and the role are all Terraform in `personal-infra`.
 - **Never hard-code the registry host** (`<account>.dkr.ecr.us-east-1.amazonaws.com`). The
-  workflow takes it from `amazon-ecr-login`'s `registry` output; the compose file from
-  `ECR_REGISTRY`.
-
-`deployments/docker-compose.yaml` runs the published image on a host; it expects the environment to
-already carry the secrets, i.e. launched through `sops exec-env`, and `ECR_REGISTRY` to be set and
-logged in to. The personal-infra host does not use it — it runs its own compose project.
+  workflow takes it from `amazon-ecr-login`'s `registry` output.
+- **The token is to come from `passkana`**, the owner's vault (personal-infra §5.23). Its client is
+  not integrated yet, so on Lambda the announcer refuses to start without `DISCORD_TOKEN`, and the
+  release's command registration fails until it is. The interactions function needs no secret.
 
 Two build-file details that bite when the module gains its first dependency:
 

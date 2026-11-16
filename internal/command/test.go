@@ -18,8 +18,8 @@ func test() Command {
 			Name:        "test",
 			Description: "Check that the running build answers interactions (only you see the reply)",
 		},
-		Handle: func(ctx context.Context, r Responder, i *discord.Interaction) error {
-			return r.Respond(ctx, i, discord.EphemeralReply("Test OK — the bot is connected and handling commands."))
+		Handle: func(context.Context, *discord.Interaction) (discord.InteractionResponse, error) {
+			return discord.EphemeralReply("Test OK — the bot is answering commands."), nil
 		},
 	}
 }

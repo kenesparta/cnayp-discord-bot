@@ -95,19 +95,18 @@ func NewClient(token string, opts ...ClientOption) *Client {
 	return c
 }
 
-// GatewayURL asks Discord where to open the gateway connection. The answer is
-// cacheable for a while but cheap enough to fetch per connect.
-func (c *Client) GatewayURL(ctx context.Context) (string, error) {
-	var response struct {
-		URL string `json:"url"`
+// CurrentApplication reads the application the token belongs to. Its id is
+// what [Client.BulkOverwriteCommands] needs; without a gateway session there is
+// no READY to learn it from.
+func (c *Client) CurrentApplication(ctx context.Context) (Application, error) {
+	var application Application
+	if err := c.do(ctx, http.MethodGet, "/applications/@me", nil, &application); err != nil {
+		return Application{}, err
 	}
-	if err := c.do(ctx, http.MethodGet, "/gateway/bot", nil, &response); err != nil {
-		return "", err
+	if application.ID == "" {
+		return Application{}, errors.New("application id is empty")
 	}
-	if response.URL == "" {
-		return "", errors.New("gateway url is empty")
-	}
-	return response.URL, nil
+	return application, nil
 }
 
 // BulkOverwriteCommands replaces the bot's registered commands with commands.

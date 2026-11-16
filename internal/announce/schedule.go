@@ -6,7 +6,8 @@ const (
 	// runHourUTC is the daily slot. 13:00 UTC is 08:00 in Ayacucho: Peru keeps a
 	// fixed UTC-5 offset with no daylight saving, so this is the same local hour
 	// every day of the year. It is also late enough that organizers in Europe and
-	// Asia who published overnight are already listed.
+	// Asia who published overnight are already listed. It has to match the
+	// schedule that invokes the run, cron(0 13 * * ? *) in personal-infra.
 	runHourUTC = 13
 
 	// weeklyWeekday is the day the digest goes out, in UTC.
@@ -23,19 +24,10 @@ const (
 	KindWeekly Kind = "weekly"
 )
 
-// nextRun returns the first slot strictly after now.
-//
-// The schedule is computed from the wall clock rather than counted off a ticker
-// because the process restarts often — the image publishes on every push to the
-// default branch — and an elapsed-time ticker would restart its 24 hours with
-// it, drifting a little further from the intended hour on every deploy. A
-// monotonic ticker also does not advance while a host is suspended.
-//
-// The other half of the reason is that a slot which passed while the process
-// was down is not replayed: a restart at 13:05 waits for tomorrow rather than
-// firing immediately. That is what makes an in-memory record of what has
-// already been announced sufficient — a restart cannot produce a second run of
-// the same slot, so it cannot produce a duplicate.
+// nextRun returns the first slot strictly after now. The schedule that fires
+// the slots is EventBridge Scheduler's (personal-infra §5.24); this only names
+// the next one in a run's log line, so a missed run is visible as a gap
+// between the "next" it promised and the run that actually followed.
 func nextRun(now time.Time) time.Time {
 	utc := now.UTC()
 

@@ -1,16 +1,15 @@
-// Package announce posts upcoming cloud native events into one Discord channel
-// on a daily schedule.
+// Package announce posts upcoming cloud native events into one Discord channel,
+// once each time the daily schedule invokes it.
 //
-// It is the layer above internal/events and internal/discord: it decides when a
-// run happens, what of a run is new, how it reads in Spanish and English, and
-// what to do when publishing fails. It holds the only state the feature keeps —
-// the set of events already announced — in memory, for the lifetime of the
-// process and nowhere else.
+// It is the layer above internal/events and internal/discord: it decides what a
+// run does, what of it is new, how it reads in Spanish and English, and what to
+// do when publishing fails. What it has to remember between runs, which events
+// each calendar listed and how many it returned, goes through a [Store]: on
+// Lambda nothing survives from one run to the next.
 //
-// The scheduler is deliberately not attached to the gateway. Anything hung off
-// the session's ready handler fires again on every reconnect, and the session
-// reconnects with backoff whenever Discord drops it, so a bad afternoon would
-// become a run of duplicate announcements.
+// The schedule is not here. EventBridge Scheduler invokes a run at 13:00 UTC
+// (personal-infra §5.24), and [kindOf] decides from the day whether the run
+// also carries the weekly digest.
 package announce
 
 import (
@@ -26,7 +25,7 @@ import (
 
 // A Collector supplies the events to announce. It is [events.Collector].
 type Collector interface {
-	Collect(ctx context.Context, now time.Time) (events.Set, []events.Health)
+	Collect(ctx context.Context, now time.Time, floors events.Floors) (events.Set, []events.Health)
 }
 
 // A Publisher posts a message to a channel. It is [discord.Client].
@@ -34,85 +33,106 @@ type Publisher interface {
 	CreateMessage(ctx context.Context, channelID string, message discord.Message) error
 }
 
-// An Announcer publishes upcoming events into one channel on a schedule.
-// Create one with [New] and drive it with [Announcer.Run].
+// A Record is what the announcer keeps about one calendar between runs. It holds
+// event identities published by the calendar and a count, nothing about any
+// person: that is the privacy policy's claim.
+type Record struct {
+	// Seen are the identities the calendar listed on its last healthy run.
+	Seen []string
+	// Floor is how many events it returned then; see [events.Floors].
+	Floor int
+}
+
+// A Store keeps the records between runs.
+type Store interface {
+	// Load returns the record of each of sources that has one. A calendar with
+	// none has never had a healthy run, and the next one seeds it silently.
+	Load(ctx context.Context, sources []events.Source) (map[events.Source]Record, error)
+	// Save replaces one calendar's record.
+	Save(ctx context.Context, source events.Source, record Record) error
+	// ClaimDigest records that the weekly digest of day is going out, and
+	// reports false when it already went. It is the guard against the schedule
+	// delivering one run twice, which its at-least-once delivery allows.
+	ClaimDigest(ctx context.Context, day time.Time) (bool, error)
+}
+
+// An Outcome is what one run did, counted. It carries no event content.
+type Outcome struct {
+	Kind Kind `json:"kind"`
+	// Off is set when no announcement channel is configured and the run did
+	// nothing at all.
+	Off       bool `json:"off,omitempty"`
+	Events    int  `json:"events"`
+	New       int  `json:"new"`
+	Messages  int  `json:"messages"`
+	Published int  `json:"published"`
+}
+
+// An Announcer publishes upcoming events into one channel. Create one with
+// [New] and drive it with [Announcer.Run].
 type Announcer struct {
 	collector Collector
 	publisher Publisher
+	store     Store
 	channelID string
+	sources   []events.Source
 	logger    *slog.Logger
-	seen      *seenSet
-
 	// now is the clock, replaceable so that a run can be exercised at a chosen
 	// instant instead of at whatever time the test happens to run.
 	now func() time.Time
 }
 
 // New returns an announcer posting to channelID. An empty channelID leaves it
-// switched off: [Announcer.Run] returns immediately, and the bot goes on serving
-// commands as before.
-func New(collector Collector, publisher Publisher, channelID string, logger *slog.Logger) *Announcer {
+// switched off: [Announcer.Run] does nothing and says so.
+func New(collector Collector, publisher Publisher, store Store, channelID string, logger *slog.Logger) *Announcer {
 	return &Announcer{
 		collector: collector,
 		publisher: publisher,
+		store:     store,
 		channelID: channelID,
+		sources:   events.Sources(),
 		logger:    logger,
-		seen:      newSeenSet(),
 		now:       time.Now,
 	}
 }
 
-// Run waits for each slot and performs the run, until ctx is cancelled.
+// Run performs one run: read the calendars, record what they listed, and
+// publish what is new.
 //
-// It blocks. The caller owns the goroutine it runs on, cancels it through ctx
-// and waits for it before shutting down, which is the same contract every other
-// goroutine in this repository keeps.
-func (a *Announcer) Run(ctx context.Context) {
+// The records are saved before anything is published. Run therefore returns an
+// error only while nothing has gone out, when loading or saving them failed:
+// then repeating the run is safe, which is what lets Lambda retry it. A
+// failure while publishing is logged and not returned, because a retry would
+// post again what already went out, and a duplicate is more visible to a
+// reader than a gap.
+func (a *Announcer) Run(ctx context.Context) (Outcome, error) {
+	return a.runAt(ctx, a.now())
+}
+
+func (a *Announcer) runAt(ctx context.Context, now time.Time) (Outcome, error) {
+	outcome := Outcome{Kind: kindOf(now)}
 	if a.channelID == "" {
 		a.logger.Info("event announcements are off", "reason", "no announcement channel configured")
-		return
+		outcome.Off = true
+		return outcome, nil
 	}
 
-	for {
-		slot := nextRun(a.now())
-
-		timer := time.NewTimer(slot.Sub(a.now()))
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return
-		case <-timer.C:
-		}
-
-		a.runOnce(ctx, slot)
-
-		// A run that outlasted the following slot does not immediately run again:
-		// the loop simply asks for the next one, and the slot that passed is
-		// reported rather than silently skipped.
-		if missed, skipped := skippedSlot(slot, a.now()); skipped {
-			a.logger.Warn("run overran the next slot, skipping it", "missed", missed.Format(time.RFC3339))
-		}
+	records, err := a.store.Load(ctx, a.sources)
+	if err != nil {
+		return outcome, fmt.Errorf("load the announcer's records: %w", err)
 	}
-}
-
-// skippedSlot reports the slot that passed while a run was still in flight.
-func skippedSlot(slot, now time.Time) (time.Time, bool) {
-	expected := slot.AddDate(0, 0, 1)
-	if nextRun(now).After(expected) {
-		return expected, true
-	}
-	return time.Time{}, false
-}
-
-// runOnce performs one run: read both calendars, work out what is new, publish
-// it, and account for the whole thing in a single log line.
-func (a *Announcer) runOnce(ctx context.Context, slot time.Time) {
-	kind := kindOf(slot)
-
-	set, health := a.collector.Collect(ctx, slot)
+	set, health := a.collector.Collect(ctx, now, floorsOf(records))
 	healthy := anyHealthy(health)
-
-	fresh := a.seen.delta(set, healthy)
+	fresh, updates := delta(records, set, health)
+	for _, report := range health {
+		record, changed := updates[report.Source]
+		if !changed {
+			continue
+		}
+		if err := a.store.Save(ctx, report.Source, record); err != nil {
+			return outcome, fmt.Errorf("save the record of %s: %w", report.Source, err)
+		}
+	}
 
 	var messages []discord.Message
 	if healthy {
@@ -120,26 +140,43 @@ func (a *Announcer) runOnce(ctx context.Context, slot time.Time) {
 		// is new, so it publishes on a first run like any other. It is skipped
 		// when every calendar failed, because a week described from nothing is
 		// not a quiet week.
-		if kind == KindWeekly {
-			messages = append(messages, renderDigest(set, slot)...)
+		if outcome.Kind == KindWeekly && a.claimDigest(ctx, now) {
+			messages = append(messages, renderDigest(set, now)...)
 		}
 		messages = append(messages, renderDaily(fresh)...)
 	}
 
 	published, err := a.publish(ctx, messages)
-
+	outcome.Events, outcome.New, outcome.Messages, outcome.Published = len(set), len(fresh), len(messages), published
 	a.logger.Info("announcement run",
-		"kind", kind,
+		"kind", outcome.Kind,
 		"calendars", statuses(health),
-		"events", len(set),
-		"new", len(fresh),
+		"events", outcome.Events,
+		"new", outcome.New,
 		"messages", published,
-		"next", nextRun(a.now()).Format(time.RFC3339),
+		"next", nextRun(now).Format(time.RFC3339),
 	)
 	if err != nil {
 		a.logger.Error("announcement run did not publish everything",
-			"kind", kind, "published", published, "of", len(messages), "error", err)
+			"kind", outcome.Kind, "published", published, "of", len(messages), "error", err)
 	}
+	return outcome, nil
+}
+
+// claimDigest reports whether this run publishes today's digest. A store that
+// cannot answer gets the cautious answer, no: a missing digest is a gap, and a
+// second one a duplicate.
+func (a *Announcer) claimDigest(ctx context.Context, now time.Time) bool {
+	claimed, err := a.store.ClaimDigest(ctx, now)
+	switch {
+	case err != nil:
+		a.logger.Error("could not record the weekly digest, skipping it", "error", err)
+		return false
+	case !claimed:
+		a.logger.Info("the weekly digest already went out today")
+		return false
+	}
+	return true
 }
 
 // publish sends the messages in order and stops at the first failure.

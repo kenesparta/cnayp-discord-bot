@@ -373,12 +373,27 @@ it, stops when that component's context is cancelled, and is waited for before s
 at all when no announcement channel is configured. It is independent of the gateway connection, so reconnects,
 resumes and session invalidations have no effect on it.
 
+*Amended 2026-11-16 (the move to Lambda, personal-infra AD-21):* the scheduling above is now EventBridge Scheduler's,
+`cron(0 13 * * ? *)` in UTC, invoking the announcer function once per slot; there is no process and no gateway to be
+independent of. The Monday rule is unchanged. The schedule delivers at least once, so the weekly digest is claimed in
+the store before it is posted, and a second run of the same day publishes no second digest. Only one run executes at
+a time because the function's reserved concurrency is 1.
+
 *Delta detection.* The set of source-qualified identities seen on the last successful run is held in memory only, for
 the lifetime of the process. On the first successful run after the process starts, the identities are recorded and the
 delta is empty, so a restart cannot re-announce. On later runs the delta is the identities that are new. Identities
 that disappear upstream are removed from the record, so a re-listed event is treated as new again. A run in which
 every source failed does not modify the record. The delta is capped at 10 entries for display, with the remainder
 reported as a count. The record is bounded by the size of the active window, roughly 100 entries.
+
+*Amended 2026-11-16 (the move to Lambda):* a run on Lambda remembers nothing of the last one, so the record is kept in
+the DynamoDB table personal-infra provisions, and it is kept **per calendar**. A calendar whose run failed or was
+degraded keeps its record untouched, so its recovery announces only what is genuinely new; above, one failed calendar
+emptied its part of a shared record and re-announced its whole listing when it came back. A calendar with no record is
+seeded silently, which is the first-run rule above applied per calendar. Each calendar's record also carries its last
+healthy count, the degraded guard's floor (FR-0001), which used to be process memory too. A record expires after five
+weeks without an update. The records are saved before anything is published, so a run that fails before publishing
+can be repeated safely, and a publishing failure is never retried.
 
 *Composition.* Framing text — headings, the summary line, the overflow line and the empty-week line — is bilingual,
 Spanish first then English. Event titles, organizer names and place names are reproduced verbatim in their original
@@ -475,7 +490,7 @@ into one channel, where that content comes from, and that nothing about them is 
 | ID       | Requirement                                                                                                                                                 |
 | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | NFR-0001 | **No third-party dependencies** — the capability is implemented with the standard library only, consistent with the existing project constraint.             |
-| NFR-0002 | **No persistent storage** — no file, cache or database is written; all state dies with the process.                                                          |
+| NFR-0002 | **No personal information stored** (amended 2026-11-16; it read "No persistent storage") — the only state written is the announcer's record: per calendar, the identities of the public events it listed and its last healthy count, and the dates the weekly digest went out. It lives in DynamoDB, expires after five weeks, and holds nothing about any person. |
 | NFR-0003 | **No new platform privileges** — no new gateway intent, no privileged intent, and no permission to read channel history.                                     |
 | NFR-0004 | **Identified outbound requests** — every third-party request carries a descriptive agent string naming the project and a contact address.                    |
 | NFR-0005 | **Polite polling** — at most one fetch per source per scheduled run, i.e. at most one per source per day.                                                     |
@@ -528,7 +543,8 @@ graph TD
 - Reminders as an event approaches; each event is announced once and appears in at most one weekly digest.
 - Editing or maintaining a single living message, and pinning.
 - Reading the announcement channel's history, and any permission that would allow it.
-- Persistent de-duplication across restarts, and therefore any state file, cache or volume.
+- ~~Persistent de-duplication across restarts, and therefore any state file, cache or volume.~~ In scope since
+  2026-11-16: on Lambda every run is a fresh start, so the record is kept in DynamoDB (NFR-0002).
 - The retired CNCF community platform's interface, which its operators disallow for automated access.
 - Translating upstream event titles or descriptions.
 - Any second announcement channel, and any per-server configuration.

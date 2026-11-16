@@ -1,59 +1,77 @@
 package announce
 
-import "github.com/kenesparta/cnayp-discord-bot/internal/events"
+import (
+	"sort"
 
-// A seenSet remembers which events have already been announced, for as long as
-// the process lives and no longer.
+	"github.com/kenesparta/cnayp-discord-bot/internal/events"
+)
+
+// delta compares one run with the stored records, calendar by calendar, and
+// returns the events to announce and the records to save.
 //
-// It is seeded silently: the first successful run records what is currently
-// listed and announces nothing. That is the whole design. A restart therefore
-// cannot re-announce a hundred events, at the cost of missing one that appeared
-// while the process was down — a miss rather than a duplicate, and the weekly
-// digest picks it up if it falls in that week. Nothing is written to disk, which
-// is what keeps the published claim of no persistent storage true.
-type seenSet struct {
-	seen   map[string]struct{}
-	seeded bool
-}
-
-// newSeenSet returns an empty, unseeded set.
-func newSeenSet() *seenSet {
-	return &seenSet{seen: make(map[string]struct{})}
-}
-
-// delta records set as the current listing and returns the events that were not
-// in the previous one.
+// Each calendar is judged on its own:
 //
-// When healthy is false the run learned nothing: every calendar failed, so the
-// listing is empty for a reason that has nothing to do with the calendars being
-// empty. Recording it would make every event look new tomorrow, so the set is
-// left exactly as it was.
+//   - One whose answer is unhealthy, failed or degraded, keeps its record
+//     exactly as it was. Its events are missing from this run for a reason that
+//     has nothing to do with the calendar being empty, and recording that would
+//     make every one of them look new when it recovers.
+//   - A healthy one with no record yet is seeded silently: what it lists is
+//     recorded and none of it is announced. That is what keeps a first run, or a
+//     run after the records were lost, from announcing a hundred events.
+//   - Otherwise what it lists and its record did not have is new, and the record
+//     becomes what it lists now. It is replaced wholesale rather than added to,
+//     so an event that disappears upstream and comes back is announced again,
+//     which is the right answer for a cancelled-then-rescheduled meetup.
 //
-// The record is replaced wholesale rather than added to, so an event that
-// disappears upstream and comes back is announced again — which is the right
-// answer for a cancelled-then-rescheduled meetup.
-func (s *seenSet) delta(set events.Set, healthy bool) events.Set {
-	if !healthy {
-		return nil
-	}
-
-	current := make(map[string]struct{}, len(set))
+// One edge stays: an event both the community calendar and the CNCF website
+// carry is listed under whichever wins the cross-calendar dedup
+// (internal/events), so while the community calendar is down it can appear,
+// once, under the website's identity.
+func delta(records map[events.Source]Record, set events.Set, health []events.Health) (events.Set, map[events.Source]Record) {
+	listed := make(map[events.Source][]string)
 	for _, event := range set {
-		current[event.Identity()] = struct{}{}
+		listed[event.Source] = append(listed[event.Source], event.Identity())
 	}
 
-	if !s.seeded {
-		s.seen = current
-		s.seeded = true
-		return nil
+	updates := make(map[events.Source]Record)
+	announce := make(map[string]bool)
+	for _, report := range health {
+		if !report.OK() {
+			continue
+		}
+		current := listed[report.Source]
+		sort.Strings(current)
+		previous, known := records[report.Source]
+		updates[report.Source] = Record{Seen: current, Floor: report.Records}
+		if !known {
+			continue
+		}
+
+		seen := make(map[string]bool, len(previous.Seen))
+		for _, identity := range previous.Seen {
+			seen[identity] = true
+		}
+		for _, identity := range current {
+			if !seen[identity] {
+				announce[identity] = true
+			}
+		}
 	}
 
 	var fresh events.Set
 	for _, event := range set {
-		if _, known := s.seen[event.Identity()]; !known {
+		if announce[event.Identity()] {
 			fresh = append(fresh, event)
 		}
 	}
-	s.seen = current
-	return fresh
+	return fresh, updates
+}
+
+// floorsOf extracts the degraded guard's floors from the records.
+func floorsOf(records map[events.Source]Record) events.Floors {
+	floors := make(events.Floors, len(records))
+	for source, record := range records {
+		floors[source] = record.Floor
+	}
+	return floors
 }

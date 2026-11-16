@@ -31,10 +31,10 @@ func recordingServer(t *testing.T, respond http.HandlerFunc) (*Client, *[]*http.
 
 func TestClientSendsBotAuthorization(t *testing.T) {
 	client, requests := recordingServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]string{"url": "wss://gateway.invalid"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"id": "1234"})
 	})
 
-	if _, err := client.GatewayURL(context.Background()); err != nil {
+	if _, err := client.CurrentApplication(context.Background()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -45,18 +45,18 @@ func TestClientSendsBotAuthorization(t *testing.T) {
 	if req.Header.Get("User-Agent") == "" {
 		t.Error("User-Agent is empty; Discord requires one")
 	}
-	if want := "/gateway/bot"; req.URL.Path != want {
+	if want := "/applications/@me"; req.URL.Path != want {
 		t.Errorf("path = %q, want %q", req.URL.Path, want)
 	}
 }
 
-func TestGatewayURLRejectsEmptyResponse(t *testing.T) {
+func TestCurrentApplicationRejectsAnEmptyID(t *testing.T) {
 	client, _ := recordingServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{})
 	})
 
-	if _, err := client.GatewayURL(context.Background()); err == nil {
-		t.Fatal("GatewayURL() = nil error, want an empty url to be rejected")
+	if _, err := client.CurrentApplication(context.Background()); err == nil {
+		t.Fatal("CurrentApplication() = nil error, want an empty id to be rejected")
 	}
 }
 

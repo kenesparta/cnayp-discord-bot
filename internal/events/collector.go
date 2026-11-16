@@ -53,18 +53,25 @@ type calendar interface {
 // name reports which calendar a fetcher belongs to.
 func (f fetcher) name() Source { return f.source }
 
-// A Collector reads both calendars and returns one normalized set.
+// A Collector reads the calendars and returns one normalized set.
 //
-// It holds the only state this package keeps: the event count each calendar
-// last answered with, which is what the degraded guard compares against. That
-// state lives for as long as the process and is never written anywhere.
-//
-// A Collector is driven by a single runner: [Collector.Collect] is not safe for
-// concurrent use.
+// It keeps no state. The one thing the guards need from earlier runs, each
+// calendar's last healthy event count, is handed to [Collector.Collect] as
+// [Floors] and read back from the [Health] it returns: the announcer keeps it
+// between runs, because a run on Lambda remembers nothing of the last one.
 type Collector struct {
 	calendars []calendar
 	logger    *slog.Logger
-	lastGood  map[Source]int
+}
+
+// Floors are the event counts each calendar answered with on its last healthy
+// run: what the degraded guard compares a new answer against. A calendar with
+// no floor has nothing to compare with, and any non-empty answer passes.
+type Floors map[Source]int
+
+// Sources lists every calendar [New] reads, in the order it reads them.
+func Sources() []Source {
+	return []Source{SourceCommunity, SourceConference, SourceKCD}
 }
 
 // settings are the defaults [New] applies, and what an [Option] overrides.
@@ -125,20 +132,20 @@ func New(logger *slog.Logger, opts ...Option) *Collector {
 			newConferenceSource(applied.httpClient, applied.userAgent, applied.conferenceBase),
 			newKCDSource(applied.httpClient, applied.userAgent, applied.kcdBase),
 		},
-		logger:   logger,
-		lastGood: make(map[Source]int, 3),
+		logger: logger,
 	}
 }
 
-// Collect reads both calendars as of now and returns the events to announce
-// together with the health of each calendar.
+// Collect reads the calendars as of now and returns the events to announce
+// together with the health of each calendar. floors are the counts of the last
+// healthy run; a calendar's new floor is its Records when its Health is OK.
 //
 // It does not return an error. One calendar failing is not a failure of the
 // run: the other still contributes, and the caller decides what to do with a
 // set that is empty because everything failed. What must never happen is a
 // failure being mistaken for good news, which is what the guards in read are
 // for.
-func (c *Collector) Collect(ctx context.Context, now time.Time) (Set, []Health) {
+func (c *Collector) Collect(ctx context.Context, now time.Time, floors Floors) (Set, []Health) {
 	var (
 		raw    []Event
 		health = make([]Health, 0, len(c.calendars))
@@ -148,7 +155,7 @@ func (c *Collector) Collect(ctx context.Context, now time.Time) (Set, []Health) 
 	// requests a day do not justify a goroutine, and every goroutine in this
 	// repository is a thing somebody has to reason about.
 	for _, cal := range c.calendars {
-		read, report := c.read(ctx, cal, now)
+		read, report := c.read(ctx, cal, now, floors[cal.name()])
 		raw = append(raw, read...)
 		health = append(health, report)
 	}
@@ -169,7 +176,7 @@ func (c *Collector) Collect(ctx context.Context, now time.Time) (Set, []Health) 
 // answers 200 with an empty list, decodes cleanly, and would otherwise be
 // announced as "nothing coming up" every day for a year. Neither calendar
 // legitimately empties, so nothing is the one answer that cannot be true.
-func (c *Collector) read(ctx context.Context, cal calendar, now time.Time) ([]Event, Health) {
+func (c *Collector) read(ctx context.Context, cal calendar, now time.Time, floor int) ([]Event, Health) {
 	source := cal.name()
 
 	raw, skipped, err := cal.fetch(ctx, now)
@@ -185,13 +192,12 @@ func (c *Collector) read(ctx context.Context, cal calendar, now time.Time) ([]Ev
 		return nil, Health{Source: source, Status: StatusFailed, Skipped: skipped, Err: err}
 	}
 
-	if floor := c.lastGood[source]; floor > 0 && count*100 < floor*degradedFloorPercent {
+	if floor > 0 && count*100 < floor*degradedFloorPercent {
 		err := &SourceError{Source: source, Code: CodeDegraded, Count: count}
 		c.logger.Error("calendar returned implausibly few events",
 			"calendar", source, "count", count, "previous", floor, "error", err)
 		return nil, Health{Source: source, Status: StatusDegraded, Records: count, Skipped: skipped, Err: err}
 	}
 
-	c.lastGood[source] = count
 	return raw, Health{Source: source, Status: StatusOK, Records: count, Skipped: skipped}
 }

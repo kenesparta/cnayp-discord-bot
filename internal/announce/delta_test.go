@@ -27,107 +27,123 @@ func event(source events.Source, id string, days int) events.Event {
 	}
 }
 
-func TestDeltaIsEmptyOnTheFirstRun(t *testing.T) {
-	// Seeding is silent, so a redeploy does not announce everything that is
-	// already listed.
-	set := events.Set{event(events.SourceCommunity, "a", 1), event(events.SourceCommunity, "b", 2)}
-	seen := newSeenSet()
+func ok(source events.Source, records int) events.Health {
+	return events.Health{Source: source, Status: events.StatusOK, Records: records}
+}
 
-	if fresh := seen.delta(set, true); len(fresh) != 0 {
-		t.Errorf("first run announced %d events, want none", len(fresh))
+func failed(source events.Source) events.Health {
+	return events.Health{Source: source, Status: events.StatusFailed}
+}
+
+func identities(set events.Set) []string {
+	out := make([]string, 0, len(set))
+	for _, e := range set {
+		out = append(out, e.Identity())
 	}
-	if !seen.seeded {
-		t.Error("the first run did not seed the set")
+	return out
+}
+
+func TestDeltaSeedsACalendarWithNoRecordSilently(t *testing.T) {
+	set := events.Set{event(events.SourceCommunity, "a", 1), event(events.SourceCommunity, "b", 2)}
+
+	fresh, updates := delta(nil, set, []events.Health{ok(events.SourceCommunity, 2)})
+
+	if len(fresh) != 0 {
+		t.Errorf("a first run announced %v", identities(fresh))
+	}
+	got := updates[events.SourceCommunity]
+	if len(got.Seen) != 2 || got.Floor != 2 {
+		t.Errorf("record = %+v, want both identities and a floor of 2", got)
 	}
 }
 
-func TestDeltaReportsOnlyNewIdentities(t *testing.T) {
-	seen := newSeenSet()
-	first := events.Set{event(events.SourceCommunity, "a", 1)}
-	seen.delta(first, true)
+func TestDeltaAnnouncesOnlyWhatIsNew(t *testing.T) {
+	records := map[events.Source]Record{events.SourceCommunity: {Seen: []string{"community/a"}, Floor: 1}}
+	set := events.Set{event(events.SourceCommunity, "a", 1), event(events.SourceCommunity, "b", 2)}
 
-	second := events.Set{
+	fresh, updates := delta(records, set, []events.Health{ok(events.SourceCommunity, 2)})
+
+	if got := identities(fresh); len(got) != 1 || got[0] != "community/b" {
+		t.Errorf("fresh = %v, want [community/b]", got)
+	}
+	if seen := updates[events.SourceCommunity].Seen; len(seen) != 2 {
+		t.Errorf("the record was not replaced by the current listing: %v", seen)
+	}
+}
+
+func TestDeltaForgetsWhatDisappearedUpstream(t *testing.T) {
+	// A cancelled-then-rescheduled meetup is news when it comes back.
+	records := map[events.Source]Record{events.SourceCommunity: {Seen: []string{"community/a", "community/b"}}}
+	_, updates := delta(records, events.Set{event(events.SourceCommunity, "a", 1)},
+		[]events.Health{ok(events.SourceCommunity, 1)})
+
+	if seen := updates[events.SourceCommunity].Seen; len(seen) != 1 || seen[0] != "community/a" {
+		t.Errorf("record = %v, want only what is listed now", seen)
+	}
+}
+
+func TestDeltaKeepsAFailedCalendarsRecord(t *testing.T) {
+	// The conference calendar is down today: its events are absent for a
+	// reason that has nothing to do with them, so its record must survive, or
+	// they would all be announced again when it recovers.
+	records := map[events.Source]Record{
+		events.SourceCommunity:  {Seen: []string{"community/a"}, Floor: 1},
+		events.SourceConference: {Seen: []string{"conference/k"}, Floor: 4},
+	}
+	set := events.Set{event(events.SourceCommunity, "a", 1)}
+
+	fresh, updates := delta(records, set, []events.Health{ok(events.SourceCommunity, 1), failed(events.SourceConference)})
+
+	if len(fresh) != 0 {
+		t.Errorf("fresh = %v, want nothing", identities(fresh))
+	}
+	if _, touched := updates[events.SourceConference]; touched {
+		t.Error("the failed calendar's record was replaced")
+	}
+
+	// It recovers with one genuinely new event: only that one is news.
+	set = append(set, event(events.SourceConference, "k", 30), event(events.SourceConference, "m", 40))
+	fresh, _ = delta(records, set, []events.Health{ok(events.SourceCommunity, 1), ok(events.SourceConference, 5)})
+
+	if got := identities(fresh); len(got) != 1 || got[0] != "conference/m" {
+		t.Errorf("after recovery fresh = %v, want [conference/m]", got)
+	}
+}
+
+func TestDeltaTreatsADegradedCalendarAsFailed(t *testing.T) {
+	records := map[events.Source]Record{events.SourceCommunity: {Seen: []string{"community/a"}, Floor: 100}}
+	degraded := events.Health{Source: events.SourceCommunity, Status: events.StatusDegraded, Records: 3}
+
+	_, updates := delta(records, nil, []events.Health{degraded})
+
+	if _, touched := updates[events.SourceCommunity]; touched {
+		t.Error("a degraded answer replaced the record, and its count would become the floor")
+	}
+}
+
+func TestDeltaSeedsANewCalendarWithoutSilencingTheOthers(t *testing.T) {
+	// A calendar added later starts with no record. Its listing is seeded; the
+	// calendars that already had records still announce.
+	records := map[events.Source]Record{events.SourceCommunity: {Seen: []string{"community/a"}}}
+	set := events.Set{
 		event(events.SourceCommunity, "a", 1),
 		event(events.SourceCommunity, "b", 2),
-		event(events.SourceConference, "319493", 40),
+		event(events.SourceKCD, "x", 3),
 	}
 
-	fresh := seen.delta(second, true)
+	fresh, updates := delta(records, set, []events.Health{ok(events.SourceCommunity, 2), ok(events.SourceKCD, 1)})
 
-	if len(fresh) != 2 {
-		t.Fatalf("announced %d events, want 2", len(fresh))
+	if got := identities(fresh); len(got) != 1 || got[0] != "community/b" {
+		t.Errorf("fresh = %v, want [community/b]", got)
 	}
-	if fresh[0].ID != "b" || fresh[1].ID != "319493" {
-		t.Errorf("announced %q and %q, want b and 319493", fresh[0].ID, fresh[1].ID)
-	}
-}
-
-func TestDeltaIsEmptyWhenNothingChanged(t *testing.T) {
-	seen := newSeenSet()
-	set := events.Set{event(events.SourceCommunity, "a", 1)}
-	seen.delta(set, true)
-
-	if fresh := seen.delta(set, true); len(fresh) != 0 {
-		t.Errorf("announced %d events on an unchanged listing, want none", len(fresh))
+	if seen := updates[events.SourceKCD].Seen; len(seen) != 1 {
+		t.Errorf("the new calendar was not seeded: %v", seen)
 	}
 }
 
-func TestDeltaKeepsTheTwoCalendarsApart(t *testing.T) {
-	// The calendars number their events independently, so the same id in both is
-	// two different events.
-	seen := newSeenSet()
-	seen.delta(events.Set{event(events.SourceCommunity, "42", 1)}, true)
-
-	fresh := seen.delta(events.Set{
-		event(events.SourceCommunity, "42", 1),
-		event(events.SourceConference, "42", 5),
-	}, true)
-
-	if len(fresh) != 1 || fresh[0].Source != events.SourceConference {
-		t.Errorf("announced %d events, want the conference one only", len(fresh))
-	}
-}
-
-func TestDeltaAnnouncesAReturningEventAgain(t *testing.T) {
-	// A meetup that is pulled and re-listed is news again.
-	seen := newSeenSet()
-	present := events.Set{event(events.SourceCommunity, "a", 1), event(events.SourceCommunity, "b", 2)}
-	seen.delta(present, true)
-
-	seen.delta(events.Set{event(events.SourceCommunity, "b", 2)}, true)
-	fresh := seen.delta(present, true)
-
-	if len(fresh) != 1 || fresh[0].ID != "a" {
-		t.Errorf("announced %d events, want the returning one", len(fresh))
-	}
-}
-
-func TestDeltaIgnoresARunWhereEveryCalendarFailed(t *testing.T) {
-	// An empty listing because everything failed is not an empty listing.
-	// Recording it would make every event look new tomorrow.
-	seen := newSeenSet()
-	set := events.Set{event(events.SourceCommunity, "a", 1)}
-	seen.delta(set, true)
-
-	if fresh := seen.delta(nil, false); fresh != nil {
-		t.Errorf("a failed run announced %d events, want none", len(fresh))
-	}
-
-	if fresh := seen.delta(set, true); len(fresh) != 0 {
-		t.Errorf("the failed run wiped the record: %d events look new", len(fresh))
-	}
-}
-
-func TestDeltaOnAFailedFirstRunDoesNotSeed(t *testing.T) {
-	seen := newSeenSet()
-
-	seen.delta(nil, false)
-	if seen.seeded {
-		t.Fatal("a failed run seeded the set; the next run would announce nothing that is genuinely new")
-	}
-
-	// The first successful run still seeds silently.
-	if fresh := seen.delta(events.Set{event(events.SourceCommunity, "a", 1)}, true); len(fresh) != 0 {
-		t.Errorf("announced %d events, want none", len(fresh))
+func TestFloorsCarryTheStoredCounts(t *testing.T) {
+	floors := floorsOf(map[events.Source]Record{events.SourceCommunity: {Floor: 12}})
+	if floors[events.SourceCommunity] != 12 {
+		t.Errorf("floors = %v", floors)
 	}
 }

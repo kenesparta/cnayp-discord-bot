@@ -4,24 +4,17 @@ package command
 
 import (
 	"context"
-	"time"
 
 	"github.com/kenesparta/cnayp-discord-bot/internal/discord"
 )
 
-// A Responder is what a handler needs from the gateway session: a way to answer
-// the interaction, and the connection health a command may want to report.
-type Responder interface {
-	Respond(ctx context.Context, i *discord.Interaction, response discord.InteractionResponse) error
-	Latency() time.Duration
-}
-
-// A Handler answers one slash-command interaction. Discord discards a response
-// that arrives more than three seconds after the interaction, so a handler that
-// cannot be that fast should reply with a deferred response first.
+// A Handler answers one slash-command interaction with the response Discord
+// shows. It runs inside the HTTP request Discord made, which Discord abandons
+// after three seconds: a handler that cannot be that fast must return a
+// deferred response and finish the work some other way.
 //
-// Returning an error means the interaction went unanswered; the caller logs it.
-type Handler func(ctx context.Context, r Responder, i *discord.Interaction) error
+// Returning an error means the interaction goes unanswered; the caller logs it.
+type Handler func(ctx context.Context, i *discord.Interaction) (discord.InteractionResponse, error)
 
 // A Command pairs the definition Discord needs in order to publish a slash
 // command with the handler invoked when someone runs it.
