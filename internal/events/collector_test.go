@@ -236,7 +236,12 @@ func TestNewReadsEveryCalendarOverOneClient(t *testing.T) {
 
 	set, health := collector.Collect(t.Context(), runClock, nil)
 
-	if len(paths) != 3 {
+	// The community calendar is asked once per attendance kind.
+	calendars := map[string]bool{}
+	for _, path := range paths {
+		calendars[path] = true
+	}
+	if len(calendars) != 3 || len(paths) != 2+len(communityKinds) {
 		t.Fatalf("requested %v, want all three calendars", paths)
 	}
 	if len(set) != 0 {

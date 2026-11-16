@@ -1,6 +1,7 @@
 package events
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,20 +11,18 @@ import (
 	"time"
 )
 
-// communityServer serves the given page bodies in request order and records the
-// query of every request it saw.
-func communityServer(t *testing.T, pages ...string) (communitySource, *[]string) {
+// kindServer answers each kind's request with its body, or with an empty
+// listing, and records the query of every request it saw.
+func kindServer(t *testing.T, bodies map[Kind]string) (communitySource, *[]string) {
 	t.Helper()
 
 	var queries []string
-	served := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		queries = append(queries, r.URL.RawQuery)
-		body := pages[len(pages)-1]
-		if served < len(pages) {
-			body = pages[served]
+		body, ok := bodies[Kind(r.URL.Query().Get("kind[0]"))]
+		if !ok {
+			body = `{"total":0,"truncated":false,"events":[]}`
 		}
-		served++
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, body)
 	}))
@@ -32,103 +31,102 @@ func communityServer(t *testing.T, pages ...string) (communitySource, *[]string)
 	return newCommunitySource(srv.Client(), defaultUserAgent, srv.URL), &queries
 }
 
-// communityRecord renders one plausible record, including the markup blob the
-// real calendar attaches to every event.
+// communityRecord renders one record of the calendar's minimal projection.
 func communityRecord(id, slug string, startsAt int64) string {
 	return fmt.Sprintf(`{
 		"event_id": %q,
 		"name": "Cloud Native Meetup",
 		"starts_at": %d,
 		"ends_at": %d,
-		"timezone": "America/Lima",
-		"kind": "in-person",
-		"canceled": false,
-		"published": true,
-		"test_event": false,
-		"group_name": "Cloud Native Ayacucho",
 		"group_slug": "ncz2zfb",
+		"group_slug_pretty": "cloud-native-ayacucho",
 		"community_name": "cncf",
 		"slug": %q,
-		"venue_city": "Ayacucho",
-		"popover_html": "<div class=\"popover\"><a href=\"/x\">Cloud Native Meetup</a></div>"
+		"latitude": -13.16,
+		"longitude": -74.22
 	}`, id, startsAt, startsAt+3600, slug)
 }
 
-func TestOCGroupsBuildsTheWindowedQuery(t *testing.T) {
-	source, queries := communityServer(t, `{"total":0,"events":[]}`)
+// listing wraps records as one kind's answer.
+func listing(records ...string) string {
+	return fmt.Sprintf(`{"total":%d,"truncated":false,"events":[%s]}`, len(records), strings.Join(records, ","))
+}
+
+func TestOCGroupsAsksOncePerKind(t *testing.T) {
+	source, queries := kindServer(t, nil)
 
 	now := time.Date(2026, 8, 20, 13, 0, 0, 0, time.UTC)
 	if _, _, err := source.fetch(t.Context(), now); err != nil {
 		t.Fatalf("fetch() = %v, want nil", err)
 	}
 
-	query := (*queries)[0]
-	for _, want := range []string{
-		"community%5B0%5D=cncf",
-		// One day wider on each side than the window that is displayed, because
-		// the server filters on the UTC day and events belong to their own.
-		"date_from=2026-08-19",
-		"date_to=2027-02-21",
-		"sort_by=date",
-		"sort_direction=asc",
-		"limit=100",
-		"offset=0",
-	} {
-		if !strings.Contains(query, want) {
-			t.Errorf("query %q is missing %q", query, want)
+	if len(*queries) != len(communityKinds) {
+		t.Fatalf("made %d requests, want one per kind", len(*queries))
+	}
+	for i, query := range *queries {
+		for _, want := range []string{
+			"community%5B0%5D=cncf",
+			// One day wider on each side than the window that is displayed,
+			// because the server filters on the UTC day and events belong to
+			// their own.
+			"date_from=2026-08-19",
+			"date_to=2027-02-21",
+			// Without it the route answers 422 (cncf/open-community-groups#730).
+			"view_mode=calendar",
+			"kind%5B0%5D=" + string(communityKinds[i]),
+		} {
+			if !strings.Contains(query, want) {
+				t.Errorf("query %q is missing %q", query, want)
+			}
 		}
 	}
 }
 
-func TestOCGroupsPagesUntilTotal(t *testing.T) {
-	first := `{"total":150,"events":[` + communityRecord("a", "sa", 1787184300) + `]}`
-	second := `{"total":150,"events":[` + communityRecord("b", "sb", 1787184400) + `]}`
-	source, queries := communityServer(t, first, second)
+func TestOCGroupsTakesTheKindFromTheQuery(t *testing.T) {
+	// The projection does not say how an event is attended; the query it
+	// answered does.
+	source, _ := kindServer(t, map[Kind]string{
+		KindVirtual: listing(communityRecord("v", "sv", 1787184300)),
+		KindHybrid:  listing(communityRecord("h", "sh", 1787184300)),
+	})
 
 	collected, _, err := source.fetch(t.Context(), time.Now())
 	if err != nil {
 		t.Fatalf("fetch() = %v, want nil", err)
 	}
-
-	if len(*queries) != 2 {
-		t.Fatalf("made %d requests, want 2", len(*queries))
+	kinds := map[string]Kind{}
+	for _, event := range collected {
+		kinds[event.ID] = event.Kind
 	}
-	if !strings.Contains((*queries)[1], "offset=100") {
-		t.Errorf("second request %q does not advance the offset", (*queries)[1])
-	}
-	if len(collected) != 2 {
-		t.Errorf("collected %d events, want 2", len(collected))
+	if kinds["v"] != KindVirtual || kinds["h"] != KindHybrid {
+		t.Errorf("kinds = %v", kinds)
 	}
 }
 
-func TestOCGroupsStopsAtThePageCeiling(t *testing.T) {
-	// A total the server keeps inflating must not spin the loop forever.
-	page := `{"total":100000,"events":[` + communityRecord("a", "sa", 1787184300) + `]}`
-	source, queries := communityServer(t, page)
-
-	if _, _, err := source.fetch(t.Context(), time.Now()); err != nil {
-		t.Fatalf("fetch() = %v, want nil", err)
-	}
-
-	if len(*queries) != communityMaxPages {
-		t.Errorf("made %d requests, want the ceiling of %d", len(*queries), communityMaxPages)
-	}
-}
-
-func TestOCGroupsDeduplicatesAcrossPages(t *testing.T) {
-	// Pages are ordered by a start many events share and the server documents no
-	// tiebreaker, so a record can appear on both sides of a boundary.
-	repeated := communityRecord("same", "slug", 1787184300)
-	first := `{"total":150,"events":[` + repeated + `]}`
-	second := `{"total":150,"events":[` + repeated + `]}`
-	source, _ := communityServer(t, first, second)
+func TestOCGroupsKeepsAnEventListedUnderTwoKindsOnce(t *testing.T) {
+	record := communityRecord("abc", "sa", 1787184300)
+	source, _ := kindServer(t, map[Kind]string{KindInPerson: listing(record), KindVirtual: listing(record)})
 
 	collected, _, err := source.fetch(t.Context(), time.Now())
 	if err != nil {
 		t.Fatalf("fetch() = %v, want nil", err)
 	}
-	if len(collected) != 1 {
-		t.Errorf("collected %d events, want 1", len(collected))
+	if len(collected) != 1 || collected[0].Kind != KindInPerson {
+		t.Errorf("collected = %+v, want one event, kept under its first kind", collected)
+	}
+}
+
+func TestOCGroupsRefusesATruncatedListing(t *testing.T) {
+	// Past the 1,000-event cap the far end of the window is missing.
+	source, _ := kindServer(t, map[Kind]string{
+		KindInPerson: `{"total":1500,"truncated":true,"events":[` + communityRecord("abc", "sa", 1787184300) + `]}`,
+	})
+
+	_, _, err := source.fetch(t.Context(), time.Now())
+
+	var sourceErr *SourceError
+	if !errors.As(err, &sourceErr) || sourceErr.Code != CodeUnusable {
+		t.Errorf("fetch() = %v, want %s", err, CodeUnusable)
 	}
 }
 
@@ -146,8 +144,7 @@ func TestOCGroupsSkipsMalformedRecords(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			good := communityRecord("good", "sg", 1787184300)
-			body := `{"total":2,"events":[` + tt.record + `,` + good + `]}`
-			source, _ := communityServer(t, body)
+			source, _ := kindServer(t, map[Kind]string{KindInPerson: listing(tt.record, good)})
 
 			collected, skipped, err := source.fetch(t.Context(), time.Now())
 			if err != nil {
@@ -165,7 +162,7 @@ func TestOCGroupsSkipsMalformedRecords(t *testing.T) {
 }
 
 func TestOCGroupsMapsARecordCompletely(t *testing.T) {
-	source, _ := communityServer(t, `{"total":1,"events":[`+communityRecord("abc", "n6guw8d", 1787184300)+`]}`)
+	source, _ := kindServer(t, map[Kind]string{KindInPerson: listing(communityRecord("abc", "n6guw8d", 1787184300))})
 
 	collected, _, err := source.fetch(t.Context(), time.Now())
 	if err != nil {
@@ -185,18 +182,18 @@ func TestOCGroupsMapsARecordCompletely(t *testing.T) {
 	if event.End.IsZero() {
 		t.Error("End is zero, want the published end")
 	}
-	if event.Zone != "America/Lima" {
-		t.Errorf("Zone = %q, want America/Lima", event.Zone)
+	// The projection carries neither a zone nor a venue (#730); they stay empty
+	// rather than guessed.
+	if event.Zone != "" || event.Place != "" {
+		t.Errorf("Zone = %q, Place = %q, want both empty", event.Zone, event.Place)
 	}
 	if event.Kind != KindInPerson {
 		t.Errorf("Kind = %q, want %q", event.Kind, KindInPerson)
 	}
-	if event.Place != "Ayacucho" {
-		t.Errorf("Place = %q, want Ayacucho", event.Place)
+	if event.Group != "Cloud Native Ayacucho" || event.groupKey != "ncz2zfb" {
+		t.Errorf("Group = %q, groupKey = %q", event.Group, event.groupKey)
 	}
-	if event.Group != "Cloud Native Ayacucho" {
-		t.Errorf("Group = %q, want Cloud Native Ayacucho", event.Group)
-	}
+	// Upstream lists only public, uncanceled, non-test events.
 	if !event.published || event.canceled || event.test {
 		t.Errorf("status flags = published %v, canceled %v, test %v", event.published, event.canceled, event.test)
 	}
@@ -206,7 +203,7 @@ func TestOCGroupsBuildsTheCanonicalURL(t *testing.T) {
 	// The payload carries no URL: it is composed from the community, group and
 	// event slugs. In production this reads
 	// https://ocgroups.dev/cncf/group/ncz2zfb/event/n6guw8d.
-	source, _ := communityServer(t, `{"total":1,"events":[`+communityRecord("abc", "n6guw8d", 1787184300)+`]}`)
+	source, _ := kindServer(t, map[Kind]string{KindInPerson: listing(communityRecord("abc", "n6guw8d", 1787184300))})
 
 	collected, _, err := source.fetch(t.Context(), time.Now())
 	if err != nil {
@@ -219,40 +216,31 @@ func TestOCGroupsBuildsTheCanonicalURL(t *testing.T) {
 	}
 }
 
-func TestOCGroupsDiscardsTheMarkupBlob(t *testing.T) {
-	// Three fifths of the response is server-rendered markup. It must never
-	// reach an Event, let alone a Discord message.
-	source, _ := communityServer(t, `{"total":1,"events":[`+communityRecord("abc", "sa", 1787184300)+`]}`)
-
-	collected, _, err := source.fetch(t.Context(), time.Now())
-	if err != nil {
-		t.Fatalf("fetch() = %v, want nil", err)
-	}
-
-	event := collected[0]
-	for field, value := range map[string]string{
-		"Title": event.Title, "Place": event.Place, "Group": event.Group, "URL": event.URL,
+func TestGroupName(t *testing.T) {
+	for pretty, want := range map[string]string{
+		"cloud-native-ayacucho": "Cloud Native Ayacucho",
+		"santiago":              "Santiago",
+		"":                      "",
+		"--":                    "",
 	} {
-		if strings.Contains(value, "<") {
-			t.Errorf("%s = %q, which carries markup", field, value)
+		if got := groupName(pretty); got != want {
+			t.Errorf("groupName(%q) = %q, want %q", pretty, got, want)
 		}
 	}
 }
 
-func TestOCGroupsMapsAttendanceKinds(t *testing.T) {
-	tests := map[string]Kind{
-		"in-person": KindInPerson,
-		"virtual":   KindVirtual,
-		"hybrid":    KindHybrid,
-		"":          KindInPerson,
-		"whatever":  KindInPerson,
+func TestCollapseKeysOnTheGroupsIDNotItsName(t *testing.T) {
+	// Most community records carry no readable group name. Keyed on the name,
+	// two groups' "Monthly Meetup" would collapse into one, and one group's
+	// meetup would never be announced.
+	at := func(group string, days int) Event {
+		start := runClock.AddDate(0, 0, days)
+		return Event{Source: SourceCommunity, ID: group + "-" + string(rune('a'+days)), Title: "Monthly Meetup",
+			Start: start, Exact: true, groupKey: group, published: true}
 	}
+	set := collapse([]Event{at("g1", 1), at("g2", 2), at("g1", 30)})
 
-	for raw, want := range tests {
-		t.Run("kind "+raw, func(t *testing.T) {
-			if got := communityKind(raw); got != want {
-				t.Errorf("communityKind(%q) = %q, want %q", raw, got, want)
-			}
-		})
+	if len(set) != 2 {
+		t.Errorf("collapsed to %d events, want one per group", len(set))
 	}
 }

@@ -94,8 +94,9 @@ func localDay(start time.Time, zone string) (time.Time, bool) {
 //
 // The calendar's own series identifier is preferred where it publishes one,
 // which it does for a minority of records. Everything else falls back to the
-// organizing group and a normalized title, which is why the normalization
-// strips case, punctuation and the occurrence numbering organizers append.
+// organizing group, by its stable id where the calendar gives one, and a
+// normalized title, which is why the normalization strips case, punctuation and
+// the occurrence numbering organizers append.
 func collapse(events []Event) Set {
 	next := make(map[string]int, len(events))
 	set := make(Set, 0, len(events))
@@ -208,7 +209,11 @@ func collapseKey(event Event) string {
 	if event.SeriesID != "" {
 		return string(event.Source) + "|series|" + event.SeriesID
 	}
-	return string(event.Source) + "|" + strings.ToLower(event.Group) + "|" + normalizeTitle(event.Title)
+	group := event.groupKey
+	if group == "" {
+		group = strings.ToLower(event.Group)
+	}
+	return string(event.Source) + "|" + group + "|" + normalizeTitle(event.Title)
 }
 
 // betterOccurrence reports whether candidate should replace current as the

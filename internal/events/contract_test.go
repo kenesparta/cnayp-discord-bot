@@ -48,7 +48,7 @@ func TestContractCommunityIgnoresAnUnknownSlug(t *testing.T) {
 	// reject a community it has never heard of, it answers 200 with nothing. If
 	// this ever starts returning an error, the guard could be relaxed.
 	source := newCommunitySource(&http.Client{Timeout: requestTimeout}, defaultUserAgent, "")
-	endpoint := strings.Replace(source.searchURL("2026-01-01", "2027-01-01", 0),
+	endpoint := strings.Replace(source.searchURL("2026-01-01", "2027-01-01", KindInPerson),
 		"community%5B0%5D=cncf", "community%5B0%5D=cncf-does-not-exist", 1)
 
 	var body communityPage
@@ -60,16 +60,44 @@ func TestContractCommunityIgnoresAnUnknownSlug(t *testing.T) {
 	}
 }
 
-func TestContractCommunityCapsThePageSize(t *testing.T) {
+func TestContractCommunityKindsPartitionTheListing(t *testing.T) {
+	// The projection does not say how an event is attended, so the source asks
+	// once per kind (cncf/open-community-groups#730). That is only complete if
+	// the kinds add up to the whole listing; a new kind would be missed.
 	source := newCommunitySource(&http.Client{Timeout: requestTimeout}, defaultUserAgent, "")
-	endpoint := strings.Replace(source.searchURL("2026-01-01", "2027-01-01", 0), "limit=100", "limit=101", 1)
+	from, to := communityQueryWindow(time.Now())
+
+	total := func(endpoint string) int {
+		t.Helper()
+		var body communityPage
+		if err := source.get(t.Context(), endpoint, &body); err != nil {
+			t.Fatalf("get() = %v", err)
+		}
+		return body.Total
+	}
+
+	sum := 0
+	for _, kind := range communityKinds {
+		sum += total(source.searchURL(from, to, kind))
+	}
+	all := strings.Replace(source.searchURL(from, to, KindInPerson), "kind%5B0%5D=in-person&", "", 1)
+	if whole := total(all); sum != whole {
+		t.Errorf("the kinds add up to %d events, the whole listing is %d: a kind is missing", sum, whole)
+	}
+}
+
+func TestContractCommunityRejectsAnUnknownKind(t *testing.T) {
+	// What makes a renamed kind fail loudly rather than drop its events.
+	source := newCommunitySource(&http.Client{Timeout: requestTimeout}, defaultUserAgent, "")
+	endpoint := strings.Replace(source.searchURL("2026-01-01", "2027-01-01", KindInPerson),
+		"kind%5B0%5D=in-person", "kind%5B0%5D=teleported", 1)
 
 	var body communityPage
 	err := source.get(t.Context(), endpoint, &body)
 
 	var sourceErr *SourceError
 	if !errors.As(err, &sourceErr) || sourceErr.Status != http.StatusUnprocessableEntity {
-		t.Errorf("get() with limit=101 = %v, want a 422: the page cap has changed", err)
+		t.Errorf("get() with an unknown kind = %v, want a 422", err)
 	}
 }
 

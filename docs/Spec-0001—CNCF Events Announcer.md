@@ -288,6 +288,16 @@ published, organizing group name and identifier, series identifier when publishe
 event page address. The upstream returns roughly 98 events in a six-month window today, in a response of roughly
 360 KB, most of it a pre-rendered markup blob that is discarded on read.
 
+*Amended 2026-11-16 (upstream change):* since cncf/open-community-groups#730 (2026-10-12) the search route serves only
+the explore calendar and map widgets. It requires `view_mode=calendar` or `map`, refusing anything else with 422, and
+answers with a minimal projection: identifier, title, start, end, the group's identifier and optional readable slug,
+the event slug, and coordinates. It is filtered upstream to listed events (public, not canceled, not a test), capped at
+1,000 with a `truncated` flag, and not paged. The source therefore asks once per attendance kind, whose filter
+partitions the listing, and takes the kind from the query. It treats every record as listed, and a truncated answer as
+unusable. The time zone, venue, group name and series identifier are gone. Days are bucketed by UTC, in-person events
+show no place, the group is named from its readable slug where one exists, and series collapse on the group's
+identifier plus the normalized title.
+
 *Community days source.* Reads the CNCF website's event listing restricted to its community-hosted host category,
 which is in practice the Kubernetes Community Days: currently 61 records of which 13 are still to come, including the
 São Paulo and Panamá editions. The listing carries every community-hosted event ever held and offers no way to ask

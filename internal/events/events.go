@@ -97,6 +97,11 @@ type Event struct {
 	// URL is the canonical page for the event on its calendar.
 	URL string
 
+	// groupKey is the calendar's stable id for the organizing group, when it
+	// publishes one. Series are collapsed on it rather than on Group, a display
+	// name that may be missing or a guess.
+	groupKey string
+
 	// canceled, test and published are the calendar's own status flags. They are
 	// unexported deliberately: they exist only until normalization drops the
 	// records that fail them, and nothing outside this package should ever be

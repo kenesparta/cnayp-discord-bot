@@ -2,21 +2,31 @@ package events
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 const (
 	// communityBaseURL is the host serving the CNCF community group calendar.
 	// It is not a documented API: the JSON comes from the same route the site's
-	// own event search calls, on a service that deploys continuously. The shape
-	// is therefore checked by a scheduled contract test, not assumed.
+	// own explore calendar calls, on a service that deploys continuously. The
+	// shape is therefore checked by a scheduled contract test, not assumed.
 	communityBaseURL = "https://ocgroups.dev"
 
 	// communitySearchPath is that route.
+	//
+	// Since cncf/open-community-groups#730 (2026-10-12) it serves only the
+	// explore calendar and map widgets. It requires view_mode, refuses any
+	// other with 422, and answers with a minimal projection of each event: no
+	// time zone, venue, attendance kind, status flags, group name or series.
+	// What it returns is filtered upstream to listed events (is_event_listed:
+	// public, not canceled, not a test), ordered by start, and capped at 1,000
+	// with a truncated flag beyond that. It ignores limit and offset.
 	communitySearchPath = "/explore/events/search"
 
 	// communitySlug selects the CNCF community. A slug the server does not know
@@ -24,17 +34,20 @@ const (
 	// result is treated as a failure rather than a quiet day.
 	communitySlug = "cncf"
 
-	// communityPageSize is the server's hard cap. Asking for more returns 422.
-	communityPageSize = 100
-
-	// communityMaxPages bounds the paging loop. The loop is driven by a total the
-	// server controls, so it needs a ceiling of its own; 10 pages is an order of
-	// magnitude above the ~100 events a six month window holds.
-	communityMaxPages = 10
+	// communityViewMode selects the calendar widget's projection. The map's
+	// keeps only events with a location, which drops the online ones.
+	communityViewMode = "calendar"
 )
 
+// communityKinds are the attendance kinds the calendar files events under. The
+// projection does not say which one an event is, but the search filters by it,
+// so the source asks once per kind: the three answers partition the listing,
+// which a contract test checks. An unknown kind is rejected with 422, so a
+// renamed one fails loudly instead of dropping its events.
+var communityKinds = []Kind{KindInPerson, KindVirtual, KindHybrid}
+
 // A communitySource reads the CNCF community group calendar: local meetups,
-// study groups and project calls, each with an exact start and a named zone.
+// study groups and project calls, each with an exact start.
 type communitySource struct {
 	fetcher
 	baseURL string
@@ -51,39 +64,32 @@ func newCommunitySource(client *http.Client, userAgent, baseURL string) communit
 	}
 }
 
-// A communityPage is one page of the search response. The response carries no
-// next-page link, so Total is what drives paging.
+// A communityPage is the whole answer for one kind. There is no paging: the
+// projection is the listing, up to its cap.
 type communityPage struct {
-	Total  int              `json:"total"`
-	Events []communityEvent `json:"events"`
+	Total     int              `json:"total"`
+	Truncated bool             `json:"truncated"`
+	Events    []communityEvent `json:"events"`
 }
 
-// A communityEvent is one record as the calendar publishes it.
-//
-// The payload also carries a popover_html blob of server-rendered markup on
-// every record, roughly three fifths of the response by size, which is
-// deliberately not declared here so that encoding/json discards it.
+// A communityEvent is one record of the minimal projection. It also carries the
+// event's coordinates, which are not declared here.
 type communityEvent struct {
-	ID        string `json:"event_id"`
-	Name      string `json:"name"`
-	StartsAt  int64  `json:"starts_at"`
-	EndsAt    *int64 `json:"ends_at"`
-	Timezone  string `json:"timezone"`
-	Kind      string `json:"kind"`
-	Canceled  bool   `json:"canceled"`
-	Published bool   `json:"published"`
-	TestEvent bool   `json:"test_event"`
-	GroupName string `json:"group_name"`
-	GroupSlug string `json:"group_slug"`
-	Community string `json:"community_name"`
-	Slug      string `json:"slug"`
-	SeriesID  string `json:"event_series_id"`
-	VenueCity string `json:"venue_city"`
-	VenueName string `json:"venue_name"`
+	ID       string `json:"event_id"`
+	Name     string `json:"name"`
+	StartsAt int64  `json:"starts_at"`
+	EndsAt   *int64 `json:"ends_at"`
+	// GroupSlug is the group's stable id, which the page address and the
+	// series collapse are built from. GroupPretty is its readable slug, which
+	// only some groups set.
+	GroupSlug   string `json:"group_slug"`
+	GroupPretty string `json:"group_slug_pretty"`
+	Community   string `json:"community_name"`
+	Slug        string `json:"slug"`
 }
 
-// fetch reads every page of the window and returns the events it could map,
-// together with the number of records dropped as malformed.
+// fetch reads the window once per attendance kind and returns the events it
+// could map, together with the number of records dropped as malformed.
 func (s communitySource) fetch(ctx context.Context, now time.Time) ([]Event, int, error) {
 	from, to := communityQueryWindow(now)
 
@@ -93,49 +99,51 @@ func (s communitySource) fetch(ctx context.Context, now time.Time) ([]Event, int
 		seen      = make(map[string]struct{})
 	)
 
-	for page := range communityMaxPages {
-		offset := page * communityPageSize
-
+	for _, kind := range communityKinds {
 		var body communityPage
-		if err := s.get(ctx, s.searchURL(from, to, offset), &body); err != nil {
+		if err := s.get(ctx, s.searchURL(from, to, kind), &body); err != nil {
 			return nil, 0, err
+		}
+		// Past the cap the far end of the window is missing. A listing known to
+		// be incomplete is not one to announce from, and failing keeps the
+		// calendar's record as it was (internal/announce).
+		if body.Truncated {
+			return nil, 0, &SourceError{
+				Source: s.source,
+				Code:   CodeUnusable,
+				Err:    fmt.Errorf("%s events truncated to %d of %d", kind, len(body.Events), body.Total),
+			}
 		}
 
 		for _, record := range body.Events {
-			event, ok := record.event(s.baseURL)
+			event, ok := record.event(s.baseURL, kind)
 			if !ok {
 				skipped++
 				continue
 			}
-			// Pages are ordered by a start time many events share, and the server
-			// documents no tiebreaker, so the same record can straddle a boundary.
+			// The kinds partition the listing, so a repeat would be a change
+			// upstream; keep the first rather than announce it twice.
 			if _, duplicate := seen[event.ID]; duplicate {
 				continue
 			}
 			seen[event.ID] = struct{}{}
 			collected = append(collected, event)
 		}
-
-		if offset+communityPageSize >= body.Total {
-			break
-		}
 	}
 
 	return collected, skipped, nil
 }
 
-// searchURL builds one page request. Every parameter here is load bearing: an
-// unknown one would be ignored silently rather than rejected, so none of them
-// can be assumed to work without the contract test that proves it.
-func (s communitySource) searchURL(from, to string, offset int) string {
+// searchURL builds the request for one kind. Every parameter here is load
+// bearing, and none of them can be assumed to work without the contract test
+// that proves it.
+func (s communitySource) searchURL(from, to string, kind Kind) string {
 	query := url.Values{}
 	query.Set("community[0]", communitySlug)
 	query.Set("date_from", from)
 	query.Set("date_to", to)
-	query.Set("sort_by", "date")
-	query.Set("sort_direction", "asc")
-	query.Set("limit", strconv.Itoa(communityPageSize))
-	query.Set("offset", strconv.Itoa(offset))
+	query.Set("kind[0]", string(kind))
+	query.Set("view_mode", communityViewMode)
 
 	return s.baseURL + communitySearchPath + "?" + query.Encode()
 }
@@ -153,11 +161,16 @@ func communityQueryWindow(now time.Time) (from, to string) {
 	return start.Format(time.DateOnly), end.Format(time.DateOnly)
 }
 
-// event maps a record onto the normalized shape. It reports false when the
-// record is missing something without which the event cannot be announced at
-// all: an identity, a title, a start, or the slugs its page address is built
-// from.
-func (r communityEvent) event(baseURL string) (Event, bool) {
+// event maps a record onto the normalized shape, with the kind it was listed
+// under. It reports false when the record is missing something without which
+// the event cannot be announced at all: an identity, a title, a start, or the
+// slugs its page address is built from.
+//
+// What the projection no longer carries is left empty rather than guessed. With
+// no zone the event is bucketed by its UTC day (normalize), which can file an
+// evening meetup in the Americas under the next day; with no venue an in-person
+// event is shown without a place.
+func (r communityEvent) event(baseURL string, kind Kind) (Event, bool) {
 	if r.ID == "" || strings.TrimSpace(r.Name) == "" || r.StartsAt == 0 {
 		return Event{}, false
 	}
@@ -166,20 +179,18 @@ func (r communityEvent) event(baseURL string) (Event, bool) {
 	}
 
 	event := Event{
-		Source:    SourceCommunity,
-		ID:        r.ID,
-		Title:     r.Name,
-		Start:     time.Unix(r.StartsAt, 0).UTC(),
-		Exact:     true,
-		Zone:      r.Timezone,
-		Kind:      communityKind(r.Kind),
-		Place:     firstNonEmpty(r.VenueCity, r.VenueName),
-		Group:     r.GroupName,
-		SeriesID:  r.SeriesID,
-		URL:       r.pageURL(baseURL),
-		canceled:  r.Canceled,
-		test:      r.TestEvent,
-		published: r.Published,
+		Source:   SourceCommunity,
+		ID:       r.ID,
+		Title:    r.Name,
+		Start:    time.Unix(r.StartsAt, 0).UTC(),
+		Exact:    true,
+		Kind:     kind,
+		Group:    groupName(r.GroupPretty),
+		groupKey: r.GroupSlug,
+		URL:      r.pageURL(baseURL),
+		// Upstream lists only events that are public, not canceled and not a
+		// test, and nothing else reaches this projection.
+		published: true,
 	}
 	if r.EndsAt != nil {
 		event.End = time.Unix(*r.EndsAt, 0).UTC()
@@ -198,27 +209,16 @@ func (r communityEvent) pageURL(baseURL string) string {
 	return baseURL + "/" + community + "/group/" + r.GroupSlug + "/event/" + r.Slug
 }
 
-// communityKind maps the calendar's attendance strings. An unrecognised value
-// falls back to in person, which understates rather than overstates: a member
-// who travels to an event that turned out to be online has lost an evening,
-// while the reverse is a missed event.
-func communityKind(raw string) Kind {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case string(KindVirtual):
-		return KindVirtual
-	case string(KindHybrid):
-		return KindHybrid
-	default:
-		return KindInPerson
+// groupName turns a readable slug into a display name:
+// "cloud-native-ayacucho" reads "Cloud Native Ayacucho". It is a guess at the
+// group's real name, which the projection does not carry, and it can miss an
+// acronym's case ("cncf-lima" reads "Cncf Lima"). Most groups set no readable
+// slug, and then the group is shown without a name.
+func groupName(pretty string) string {
+	words := strings.FieldsFunc(pretty, func(r rune) bool { return r == '-' || r == '_' || unicode.IsSpace(r) })
+	for i, word := range words {
+		first, size := utf8.DecodeRuneInString(word)
+		words[i] = string(unicode.ToUpper(first)) + word[size:]
 	}
-}
-
-// firstNonEmpty returns the first value that is not blank.
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
+	return strings.Join(words, " ")
 }
