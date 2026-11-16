@@ -63,7 +63,7 @@ func decodeResponse(t *testing.T, recorder *httptest.ResponseRecorder) discord.I
 }
 
 func commandInteraction(name string) string {
-	return `{"id":"1","token":"secret-token","type":2,"data":{"name":"` + name + `"},"member":{"user":{"id":"42","username":"someone"}}}`
+	return `{"id":"1","token":"secret-token","type":2,"data":{"name":"` + name + `"},"member":{"user":{"id":"880011223344556677","username":"someone-who-ran-it"}}}`
 }
 
 func TestInteractionsAnswersPingWithPong(t *testing.T) {
@@ -123,7 +123,8 @@ func TestInteractionsLogsTheCommandNameAndNothingElse(t *testing.T) {
 	if !strings.Contains(logged, "command=ping") {
 		t.Errorf("the command name was not logged:\n%s", logged)
 	}
-	for _, forbidden := range []string{"secret-token", "someone", "42"} {
+	// A full snowflake, so that no timestamp in the log line can contain it.
+	for _, forbidden := range []string{"secret-token", "someone-who-ran-it", "880011223344556677"} {
 		if strings.Contains(logged, forbidden) {
 			t.Errorf("the logs carry %q, which the privacy policy says they do not:\n%s", forbidden, logged)
 		}
