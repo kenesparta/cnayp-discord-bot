@@ -1,5 +1,23 @@
 name: Release image
 
+# Builds the bot's image and pushes it to the private Amazon ECR repository
+# `cnayp-discord-bot` in us-east-1. The job authenticates by assuming the IAM
+# role `github-actions-ecr-push-cnayp-discord-bot` through GitHub's OIDC
+# provider; its trust policy admits only refs/heads/main and refs/tags/v* of
+# this repo, and it may push to that one repository and nothing else. No AWS
+# access keys exist on either side.
+#
+# The role's ARN is the secret AWS_ECR_PUSH_ROLE_ARN. It is deliberately not
+# site.yml's AWS_ROLE_ARN: that one is a different role, for the legal pages,
+# and the two stay separate — one role, one repository, one resource. Both are
+# provisioned in the personal-infra repo (make output NAME=ecr_push_role_arns).
+#
+# The personal-infra host deploys `:latest`, and only a v* tag moves it, so
+# cutting a release is what puts the bot live. Pushes to main publish `:edge`
+# and `:sha-<short>` without touching what the host runs.
+#
+# The registry host (<account>.dkr.ecr.us-east-1.amazonaws.com) is never
+# written here; it comes from amazon-ecr-login's `registry` output.
 on:
   push:
     branches: [main]
@@ -7,7 +25,7 @@ on:
 
 permissions:
   contents: read
-  packages: write
+  id-token: write
 
 concurrency:
   group: release-${{ github.ref }}
@@ -21,17 +39,19 @@ jobs:
 
       - uses: docker/setup-buildx-action@v4
 
-      - uses: docker/login-action@v4
+      - uses: aws-actions/configure-aws-credentials@v6
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          role-to-assume: ${{ secrets.AWS_ECR_PUSH_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
 
       # main -> :edge and :sha-<commit>; v1.2.3 -> :1.2.3, :1.2, :latest.
       - id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ${{ steps.ecr.outputs.registry }}/cnayp-discord-bot
           tags: |
             type=ref,event=branch
             type=edge,branch=main

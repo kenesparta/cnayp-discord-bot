@@ -191,9 +191,31 @@ sops exec-env secrets/prod.enc.yaml \
 
 ## Deployment
 
-Pushes to `main` publish `ghcr.io/kenesparta/cnayp-discord-bot:edge`; `v*` tags publish semver tags
-and `:latest`. On the host:
+`.github/workflows/release.yml` pushes the image to the private Amazon ECR repository
+`cnayp-discord-bot` in `us-east-1`. Pushes to `main` publish `:edge` and `:sha-<short>`; `v*` tags
+publish semver tags and `:latest`. The production host, run from the `personal-infra` repository,
+pulls `:latest` every ten minutes, so cutting a `v*` tag is what puts a release live — a push to
+`main` does not.
+
+The workflow authenticates by assuming the IAM role `github-actions-ecr-push-cnayp-discord-bot`
+through GitHub's OIDC provider. Its trust policy admits only `main` and `v*` tags of this repo, and it
+can push to that one ECR repository and nothing else; the repository and the role are both Terraform
+in `personal-infra`. **One-time setup by the owner:** store the role's ARN as the repository secret
+`AWS_ECR_PUSH_ROLE_ARN`, reading it in `personal-infra` with:
 
 ```sh
+make output NAME=ecr_push_role_arns   # the cnayp-discord-bot role -> AWS_ECR_PUSH_ROLE_ARN secret
+```
+
+That is a different secret from the policy site's `AWS_ROLE_ARN`, for a different role, on purpose —
+the two stay separate. The registry host is not written anywhere in this repo; the workflow takes it
+from `amazon-ecr-login`.
+
+To run the image on some other host by hand, log in to the registry first, then start it through
+sops:
+
+```sh
+export ECR_REGISTRY=<account>.dkr.ecr.us-east-1.amazonaws.com
+aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin "$ECR_REGISTRY"
 sops exec-env secrets/prod.enc.yaml 'docker compose -f deployments/docker-compose.yaml up -d'
 ```

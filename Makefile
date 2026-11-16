@@ -1,5 +1,8 @@
 BIN     := bin/bot
-IMAGE   ?= ghcr.io/kenesparta/cnayp-discord-bot
+# A bare local name, so `make docker` needs no AWS credentials. The published
+# image is <account>.dkr.ecr.us-east-1.amazonaws.com/cnayp-discord-bot; pass
+# IMAGE=... to tag a local build with that reference instead.
+IMAGE   ?= cnayp-discord-bot
 SECRETS := secrets/prod.enc.yaml
 
 # sops looks under ~/Library/Application Support on macOS; point it at the XDG

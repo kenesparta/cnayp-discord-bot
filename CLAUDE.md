@@ -168,12 +168,22 @@ Adding a recipient (new maintainer or deploy host) means editing `.sops.yaml` an
 
 ## Deployment
 
-`.github/workflows/release.yml` builds and pushes to `ghcr.io/kenesparta/cnayp-discord-bot` on
-pushes to `main` (`:edge`, `:sha-<short>`) and on `v*` tags (semver + `:latest`). The image is a
-static `CGO_ENABLED=0` binary on `distroless/static`, running as `nonroot`.
+`.github/workflows/release.yml` builds and pushes to the private Amazon ECR repository
+`cnayp-discord-bot` (`us-east-1`) on pushes to `main` (`:edge`, `:sha-<short>`) and on `v*` tags
+(semver + `:latest`). The image is a static `CGO_ENABLED=0` binary on `distroless/static`, running
+as `nonroot`. The personal-infra host deploys `:latest`, so a `v*` tag is what goes live.
+
+- **It assumes `github-actions-ecr-push-cnayp-discord-bot` over OIDC via the secret
+  `AWS_ECR_PUSH_ROLE_ARN`** — a different role and secret from `site.yml`'s `AWS_ROLE_ARN`. Never
+  point both workflows at one role: one role, one repository, one resource. The ECR repository and
+  the role are Terraform in `personal-infra`, like the site's resources.
+- **Never hard-code the registry host** (`<account>.dkr.ecr.us-east-1.amazonaws.com`). The
+  workflow takes it from `amazon-ecr-login`'s `registry` output; the compose file from
+  `ECR_REGISTRY`.
 
 `deployments/docker-compose.yaml` runs the published image on a host; it expects the environment to
-already carry the secrets, i.e. launched through `sops exec-env`.
+already carry the secrets, i.e. launched through `sops exec-env`, and `ECR_REGISTRY` to be set and
+logged in to. The personal-infra host does not use it — it runs its own compose project.
 
 Two build-file details that bite when the module gains its first dependency:
 
