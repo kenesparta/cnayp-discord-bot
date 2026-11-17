@@ -15,7 +15,7 @@
   <h1>Privacy Policy</h1>
   <p class="meta">
     <span><strong>Effective date:</strong> 14 August 2026</span>
-    <span><strong>Last updated:</strong> 16 November 2026</span>
+    <span><strong>Last updated:</strong> 17 November 2026</span>
   </p>
 
   <p>This policy explains what the Cloud Native Ayacucho Community (CNAYP) Discord bot
@@ -34,6 +34,18 @@
     because it does not request the permission that would let it. Two things make it act: a command
     you run, and a daily timer that posts upcoming cloud native events into one channel. What it
     receives from you, it uses to answer, and then discards.</p>
+  </div>
+
+  <div class="callout">
+    <p><strong>While the Bot moves (from 17 November 2026).</strong> This policy describes the Bot as it
+    runs once its move to AWS Lambda is complete. Until then, the version answering commands today runs
+    on a server (AWS Lightsail) and differs in three ways. It holds a connection to Discord&rsquo;s
+    gateway with the <code>GUILDS</code> intent only, so it receives events describing which servers it
+    is in and whether they are available, and your commands reach it over that connection rather than
+    over HTTPS. It stores nothing persistently, reads no event calendars and posts no announcements yet.
+    Its logs also record
+    its connection events: connecting, reconnecting and heartbeat health. Nothing else on this page
+    differs for it, and this note will be removed once the move is complete.</p>
   </div>
 
   <h2>What the Bot receives</h2>
