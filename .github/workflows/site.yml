@@ -31,7 +31,10 @@ env:
   #   terraform output cnayp_bot_site_bucket
   #   terraform output cnayp_bot_site_distribution_id
   #   terraform output cnayp_bot_site_role_arn
-  BUCKET: kenesparta-cnayp-bot-site
+  # The bucket behind cnayp-bot.kenesparta.dev since personal-infra's account
+  # move (its N10). AWS_ROLE_ARN and CLOUDFRONT_DISTRIBUTION_ID name the same
+  # account's role and distribution.
+  BUCKET: kenesparta-cnayp-bot-pages
   AWS_REGION: us-east-1
 
 jobs:
