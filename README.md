@@ -149,7 +149,7 @@ deploy role live in the `personal-infra` repository (`terraform/static-cnayp-bot
 Get the three values this repo's workflow needs from there:
 
 ```sh
-terraform output cnayp_bot_site_bucket           # kenesparta-cnayp-bot-site
+terraform output cnayp_bot_site_bucket           # kenesparta-cnayp-bot-pages
 terraform output cnayp_bot_site_distribution_id  # -> CLOUDFRONT_DISTRIBUTION_ID variable
 terraform output cnayp_bot_site_role_arn         # -> AWS_ROLE_ARN secret
 ```
